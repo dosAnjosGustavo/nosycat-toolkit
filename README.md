@@ -1,15 +1,17 @@
-```
-                 .---.
-               _/_____\_     ________
-                ( o.o )     |$ sniff |
-                 > ^ <      |$ _     |
-                /     \_____|________|
-               (__| |__)   /________/
-
-      .·:*¨¨* ❀ nosycat-toolkit ❀ *¨¨*:·.
-         post-deploy check-up for linux vps
-               ~ sniffing for clues ~
-```
+<div align="center">
+<pre>
+           .---.                     
+         _/_____\_     ________      
+          ( o.o )     |$ sniff |     
+           > ^ <      |$ _     |     
+          /     \_____|________|     
+         (__| |__)   /________/      
+                                     
+.·:*¨¨* ❀ nosycat-toolkit ❀ *¨¨*:·.  
+   post-deploy check-up for linux vps
+         ~ sniffing for clues ~      
+</pre>
+</div>
 
 <h1 align="center">nosycat-toolkit</h1>
 
