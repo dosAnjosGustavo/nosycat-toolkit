@@ -23,21 +23,84 @@ IGNORE_WHY=()
 
 CUR_MOD=""
 FORMAT="text"
-USE_COLOR=1
+COLOR_MODE="auto"   # auto | always | never (--color / --no-color)
+ASCII_MODE="auto"   # auto | on (--ascii)
 LIVE_TEXT=1
 NOSY_TIMEOUT="${NOSY_TIMEOUT:-10}"
+# Locale of the caller; nosycat.sh captures it before forcing LC_ALL=C.
+NOSY_LOCALE="${NOSY_LOCALE-}"
 
 if [ "$(id -u)" -eq 0 ]; then IS_ROOT=1; else IS_ROOT=0; fi
 
-C_OK="" C_WARN="" C_FAIL="" C_SKIP="" C_DIM="" C_BOLD="" C_PINK="" C_RST=""
+C_OK="" C_WARN="" C_FAIL="" C_SKIP="" C_IGN="" C_DIM="" C_BOLD="" C_PINK="" C_LILAC="" C_SKY="" C_RST=""
 
+# colors_off -> blank every color variable (used for files and pipes).
+colors_off() {
+  C_OK="" C_WARN="" C_FAIL="" C_SKIP="" C_IGN="" C_DIM="" C_BOLD="" C_PINK="" C_LILAC="" C_SKY="" C_RST=""
+}
+
+# want_color -> true when ANSI colors should be used on stdout.
+# never/--no-color: off. always: on (even when piped or NO_COLOR is set).
+# auto: on only for a terminal, without NO_COLOR, and with TERM other than dumb.
+want_color() {
+  case "$COLOR_MODE" in
+    never) return 1 ;;
+    always) return 0 ;;
+  esac
+  { [ -t 1 ] || [ "${NOSY_FX_TTY:-}" = 1 ]; } && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]
+}
+
+# color_depth -> truecolor | 256 | 8
+color_depth() {
+  case "${COLORTERM:-}" in truecolor|24bit) echo truecolor; return ;; esac
+  case "${TERM:-}" in *256color*|*-direct|xterm-kitty|alacritty|wezterm|foot*) echo 256; return ;; esac
+  echo 8
+}
+
+# Pastel palette (mid-tones, so it reads on dark and light backgrounds):
+#   FAIL rose #ec5f99 · WARN peach #ef9a48 · OK mint #3dbd88 · SKIP lavender #9a8fd0
+#   IGNORED grey #9a9aa6 · divider pink #ff79c6 · box/headers lilac #b084f5 · fix sky #4aaee3
 setup_colors() {
-  if [ "$USE_COLOR" -eq 1 ] && [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_FAIL=$'\033[31m'
-    C_SKIP=$'\033[90m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
-    C_PINK=$'\033[35m'; C_RST=$'\033[0m'
+  colors_off
+  want_color || return 0
+  C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_RST=$'\033[0m'
+  case "$(color_depth)" in
+    truecolor)
+      C_FAIL=$'\033[38;2;236;95;153m'; C_WARN=$'\033[38;2;239;154;72m'; C_OK=$'\033[38;2;61;189;136m'
+      C_SKIP=$'\033[38;2;154;143;208m'; C_IGN=$'\033[38;2;154;154;166m'; C_PINK=$'\033[38;2;255;121;198m'
+      C_LILAC=$'\033[38;2;176;132;245m'; C_SKY=$'\033[38;2;74;174;227m' ;;
+    256)
+      C_FAIL=$'\033[38;5;204m'; C_WARN=$'\033[38;5;215m'; C_OK=$'\033[38;5;78m'
+      C_SKIP=$'\033[38;5;140m'; C_IGN=$'\033[38;5;247m'; C_PINK=$'\033[38;5;212m'
+      C_LILAC=$'\033[38;5;141m'; C_SKY=$'\033[38;5;74m' ;;
+    *)
+      C_FAIL=$'\033[31m'; C_WARN=$'\033[33m'; C_OK=$'\033[32m'; C_SKIP=$'\033[90m'
+      C_IGN=$'\033[90m'; C_PINK=$'\033[35m'; C_LILAC=$'\033[35m'; C_SKY=$'\033[36m' ;;
+  esac
+}
+
+# use_utf8 -> true when box drawing and symbols are safe to print.
+use_utf8() {
+  [ "$ASCII_MODE" = "on" ] && return 1
+  case "$NOSY_LOCALE" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;; esac
+  return 1
+}
+
+# Glyphs: UTF-8 when the locale allows it, plain ASCII otherwise (or with --ascii).
+setup_glyphs() {
+  if use_utf8; then
+    G_FAIL="✗" G_WARN="!" G_OK="✓" G_SKIP="·" G_IGN="~"
+    G_TL="╭" G_TR="╮" G_BL="╰" G_BR="╯" G_H="─" G_V="│"
+    G_BAR="█" G_BAR_FAIL="█" G_BAR_WARN="▓" G_BAR_OK="▒" G_BAR_SKIP="░" G_BAR_IGN="░"
+    G_FLOWER="❀" G_DIV=".·:*¨¨* ❀ *¨¨*:·." G_MORE="…" G_DOT="·"
+  else
+    G_FAIL="x" G_WARN="!" G_OK="+" G_SKIP="." G_IGN="~"
+    G_TL="+" G_TR="+" G_BL="+" G_BR="+" G_H="-" G_V="|"
+    G_BAR="#" G_BAR_FAIL="X" G_BAR_WARN="!" G_BAR_OK="=" G_BAR_SKIP="." G_BAR_IGN="~"
+    G_FLOWER="@" G_DIV=".:*''* @ *''*:." G_MORE="..." G_DOT="-"
   fi
 }
+setup_glyphs
 
 # have CMD -> true when CMD is on PATH.
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -70,6 +133,7 @@ q() { t "$NOSY_TIMEOUT" "$@" 2>/dev/null; }
 #     SSH_UNITS (systemctl list-unit-files ssh.service sshd.service), NGINX_T (nginx -T),
 #     SUID (list of SUID files)
 #   NOSY_FSTAB, NOSY_PROC_MOUNTS  alternative fstab and /proc/mounts
+#   NOSY_FX_TTY=1         treat stdout as a terminal (color auto-detection tests)
 ETC="${NOSY_ETC:-/etc}"
 
 # fx NAME CMD... -> print the NOSY_FX_NAME fixture if set, otherwise run CMD under q.
@@ -159,17 +223,18 @@ skip() { record SKIP "$1" "$2" "${3:-}" ""; }
 
 print_check_line() {
   local st="$1" id="$2" title="$3" detail="$4" fix="$5" col label="$1"
+  if ! use_utf8; then title="$(_asciify "$title")"; detail="$(_asciify "$detail")"; fi
   case "$st" in
-    OK) col="$C_OK" ;; WARN) col="$C_WARN" ;; FAIL) col="$C_FAIL" ;; IGNORED) col="$C_SKIP"; label="IGN" ;; *) col="$C_SKIP" ;;
+    OK) col="$C_OK" ;; WARN) col="$C_WARN" ;; FAIL) col="$C_FAIL" ;; IGNORED) col="$C_IGN"; label="IGN" ;; *) col="$C_SKIP" ;;
   esac
-  printf '  %s%-6s%s %-8s %s\n' "$col" "[$label]" "$C_RST" "$id" "$title"
-  if [ -n "$detail" ]; then printf '  %s                why: %s%s\n' "$C_DIM" "$detail" "$C_RST"; fi
-  if [ -n "$fix" ] && [ "$st" != "OK" ] && [ "$st" != "IGNORED" ]; then printf '  %s                fix: %s%s\n' "$C_DIM" "$fix" "$C_RST"; fi
+  printf '  %s%-6s%s %s%-8s%s %s\n' "$col$C_BOLD" "[$label]" "$C_RST" "$C_LILAC" "$id" "$C_RST" "$title"
+  if [ -n "$detail" ]; then printf '                  %swhy:%s %s%s%s\n' "$C_SKIP" "$C_RST" "$C_DIM" "$detail" "$C_RST"; fi
+  if [ -n "$fix" ] && [ "$st" != "OK" ] && [ "$st" != "IGNORED" ]; then printf '                  %sfix:%s %s%s%s\n' "$col" "$C_RST" "$C_SKY" "$fix" "$C_RST"; fi
 }
 
 module_header() {
   if [ "$FORMAT" = "text" ] && [ "$LIVE_TEXT" -eq 1 ]; then
-    printf '\n%s❀ %s%s\n' "$C_PINK$C_BOLD" "$1" "$C_RST"
+    printf '\n%s%s%s %s%s%s\n' "$C_PINK" "$G_FLOWER" "$C_RST" "$C_LILAC$C_BOLD" "$1" "$C_RST"
   fi
 }
 

@@ -21,7 +21,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### added
 
 - `.nosycat.ignore` in the state dir and `--ignore FILE` (repeatable): accepted WARN/FAIL results become `IGNORED`, keep `original_status` and `ignore_reason` in JSON, and do not affect the exit code.
-- bats test suite (69 tests) with fixtures under `tests/`, run in CI on the runner and in the Ubuntu, Debian, Rocky Linux and Alpine containers. `NOSY_ETC` and `NOSY_FX_*` generalize the old `NOSY_FSTAB` fixture hook.
+- Pretty text summary: a boxed card with FAIL/WARN/OK/SKIP counts and a proportional bar colored by status, status by module in two columns, a "fix first" list (FAIL before WARN, top 8, `+N more`), a verdict with a cat face (`=x.x=` failures, `=o.o=` warnings, `=^.^=` all clear) and a note on checks skipped without root. Laid out by display width so it stays aligned and fits 80 columns.
+- Pastel palette in truecolor or 256 colors (8-color fallback), also on the per-check status tags, ids and fix commands. `--color auto|always|never`; `auto` colors only a terminal and honours `NO_COLOR` and `TERM=dumb`. `--no-color` is `--color never`.
+- ASCII fallback for the box, bar, symbols and banner when the locale is not UTF-8, or with `--ascii`.
+- bats test suite (81 tests) with fixtures under `tests/`, run in CI on the runner and in the Ubuntu, Debian, Rocky Linux and Alpine containers. `NOSY_ETC` and `NOSY_FX_*` generalize the old `NOSY_FSTAB` fixture hook.
 - Release workflow: pushing a `v*` tag runs lint and tests, then publishes `nosycat-toolkit-X.Y.Z.tar.gz` and its `.sha256`. The README documents a verified install from a release.
 
 ### changed
