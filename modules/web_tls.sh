@@ -41,40 +41,8 @@ mod_web_tls() {
     skip WEB-003 "apache config test" "apache not installed"
   fi
 
-  # WEB-004 certificate expiry
-  local certs=() c f d
-  for c in "$ETC"/letsencrypt/live/*/cert.pem; do [ -e "$c" ] && certs+=("$c"); done
-  if [ -d "$ETC/nginx" ]; then
-    while read -r f; do [ -n "$f" ] && certs+=("$f"); done < <(grep -rhoE '^[[:space:]]*ssl_certificate[[:space:]]+[^;]+' "$ETC/nginx" 2>/dev/null | awk '{print $2}' | tr -d '"'"'" | grep -v '\$')
-  fi
-  for d in "$ETC/apache2" "$ETC/httpd"; do
-    [ -d "$d" ] || continue
-    while read -r f; do [ -n "$f" ] && certs+=("$f"); done < <(grep -rhoiE '^[[:space:]]*SSLCertificateFile[[:space:]]+[^[:space:]]+' "$d" 2>/dev/null | awk '{print $2}' | tr -d '"')
-  done
-  if [ "${#certs[@]}" -eq 0 ]; then
-    skip WEB-004 "certificate expiry" "no certificates found in /etc/letsencrypt, nginx or apache config"
-  elif ! have openssl; then
-    skip WEB-004 "certificate expiry" "openssl not installed"
-  else
-    local expired=() soon=() good=0 unread=0 end
-    mapfile -t certs < <(printf '%s\n' "${certs[@]}" | sort -u)
-    for c in "${certs[@]}"; do
-      if [ ! -r "$c" ]; then unread=$((unread + 1)); continue; fi
-      end="$(q openssl x509 -in "$c" -noout -enddate | cut -d= -f2)"
-      if ! q openssl x509 -in "$c" -noout -checkend 0 >/dev/null; then expired+=("$c ($end)")
-      elif ! q openssl x509 -in "$c" -noout -checkend $((CERT_WARN_DAYS * 86400)) >/dev/null; then soon+=("$c ($end)")
-      else good=$((good + 1)); fi
-    done
-    if [ "${#expired[@]}" -gt 0 ]; then
-      fail WEB-004 "expired certificate(s): $(trunc_list 3 "${expired[@]}")" "browsers and API clients refuse the connection" "sudo certbot renew   # then reload the web server"
-    elif [ "${#soon[@]}" -gt 0 ]; then
-      warn WEB-004 "certificate(s) expire within $CERT_WARN_DAYS days: $(trunc_list 3 "${soon[@]}")" "auto-renewal normally renews at 30 days left; this one is not renewing" "sudo certbot renew --dry-run"
-    elif [ "$good" -gt 0 ]; then
-      ok WEB-004 "$good certificate(s) valid for more than $CERT_WARN_DAYS days" ""
-    else
-      skip WEB-004 "certificate expiry" "$unread certificate(s) not readable; needs root"
-    fi
-  fi
+  # WEB-004 certificate expiry (only certificates the enabled config uses)
+  _web_cert_check
 
   # WEB-005 certbot renewal scheduled
   if have certbot || [ -d /etc/letsencrypt/renewal ]; then
@@ -85,5 +53,85 @@ mod_web_tls() {
     fi
   else
     skip WEB-005 "certbot renewal" "certbot not installed"
+  fi
+}
+
+# _web_enabled_conf -> the web server configuration that is actually loaded:
+# `nginx -T` when it can run, otherwise nginx.conf, conf.d and sites-enabled
+# (never sites-available); the enabled apache files likewise.
+_web_enabled_conf() {
+  local out="" f
+  if fx_set NGINX_T || { have nginx && [ "$IS_ROOT" -eq 1 ]; }; then
+    out="$(if fx_set NGINX_T; then fx NGINX_T; else t 15 nginx -T 2>/dev/null; fi)"
+  fi
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  else
+    for f in "$ETC"/nginx/nginx.conf "$ETC"/nginx/conf.d/*.conf "$ETC"/nginx/sites-enabled/*; do
+      [ -f "$f" ] && [ -r "$f" ] && cat -- "$f"
+    done
+  fi
+  for f in "$ETC"/apache2/apache2.conf "$ETC"/apache2/ports.conf "$ETC"/apache2/sites-enabled/* \
+           "$ETC"/apache2/conf-enabled/*.conf "$ETC"/apache2/mods-enabled/*.conf \
+           "$ETC"/httpd/conf/httpd.conf "$ETC"/httpd/conf.d/*.conf; do
+    [ -f "$f" ] && [ -r "$f" ] && cat -- "$f"
+  done
+  return 0
+}
+
+# _cert_state FILE -> expired | soon | good | unread
+_cert_state() {
+  if [ ! -r "$1" ]; then echo unread
+  elif ! q openssl x509 -in "$1" -noout -checkend 0 >/dev/null; then echo expired
+  elif ! q openssl x509 -in "$1" -noout -checkend $((CERT_WARN_DAYS * 86400)) >/dev/null; then echo soon
+  else echo good; fi
+}
+
+_web_cert_check() {
+  local used=() orphan=() f c d
+  while read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in /etc/*) f="$ETC/${f#/etc/}" ;; esac
+    used+=("$f")
+  done < <(_web_enabled_conf | grep -hoiE '^[[:space:]]*(ssl_certificate|SSLCertificateFile)[[:space:]]+[^;[:space:]]+' | awk '{print $2}' | tr -d '"'"'" | grep -v '\$' | sort -u)
+  # Let's Encrypt lineages no enabled vhost points at (left over from old sites).
+  for d in "$ETC"/letsencrypt/live/*/; do
+    [ -e "$d/cert.pem" ] || continue
+    case " ${used[*]} " in *" ${d%/}/"*) continue ;; esac
+    orphan+=("${d%/}/cert.pem")
+  done
+  if [ "${#used[@]}" -eq 0 ] && [ "${#orphan[@]}" -eq 0 ]; then
+    skip WEB-004 "certificate expiry" "no certificates found in enabled nginx/apache config or /etc/letsencrypt"
+    return
+  fi
+  if ! have openssl; then skip WEB-004 "certificate expiry" "openssl not installed"; return; fi
+  local expired=() soon=() stale=() good=0 unread=0 end st
+  for c in "${used[@]}"; do
+    st="$(_cert_state "$c")"
+    end="$(q openssl x509 -in "$c" -noout -enddate | cut -d= -f2)"
+    case "$st" in
+      expired) expired+=("$c ($end)") ;; soon) soon+=("$c ($end)") ;;
+      good) good=$((good + 1)) ;; *) unread=$((unread + 1)) ;;
+    esac
+  done
+  for c in "${orphan[@]}"; do
+    st="$(_cert_state "$c")"
+    case "$st" in
+      expired|soon) stale+=("$(basename "$(dirname "$c")") ($st, $(q openssl x509 -in "$c" -noout -enddate | cut -d= -f2))") ;;
+      good) good=$((good + 1)) ;; *) unread=$((unread + 1)) ;;
+    esac
+  done
+  local note=""
+  [ "${#stale[@]}" -gt 0 ] && note="Let's Encrypt cert(s) not used by any enabled vhost: $(trunc_list 3 "${stale[@]}")"
+  if [ "${#expired[@]}" -gt 0 ]; then
+    fail WEB-004 "expired certificate(s) in enabled config: $(trunc_list 3 "${expired[@]}")" "browsers and API clients refuse the connection${note:+; also: $note}" "sudo certbot renew   # then reload the web server"
+  elif [ "${#soon[@]}" -gt 0 ]; then
+    warn WEB-004 "certificate(s) expire within $CERT_WARN_DAYS days: $(trunc_list 3 "${soon[@]}")" "auto-renewal normally renews at 30 days left; this one is not renewing${note:+; also: $note}" "sudo certbot renew --dry-run"
+  elif [ "${#stale[@]}" -gt 0 ]; then
+    warn WEB-004 "$note" "no enabled site serves them, but certbot keeps trying to renew them (renewal errors, rate limits)" "sudo certbot delete --cert-name NAME   # if the site is gone"
+  elif [ "$good" -gt 0 ]; then
+    ok WEB-004 "$good certificate(s) valid for more than $CERT_WARN_DAYS days" ""
+  else
+    skip WEB-004 "certificate expiry" "$unread certificate(s) not readable; needs root"
   fi
 }

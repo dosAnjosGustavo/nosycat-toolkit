@@ -10,6 +10,31 @@ _SUID_KNOWN=" su sudo sudoedit passwd chsh chfn newgrp gpasswd chage expiry moun
  lxc-user-nic usernetctl grub2-set-bootflag sudoreplay bbsuid busybox cockpit-session vmware-user-suid-wrapper
  Xorg arping traceroute mtr-packet chromium-sandbox dmcrypt-get-device "
 
+# _pkg_owner_tool -> name of the tool that maps a file to its package, if any.
+_pkg_owner_tool() {
+  case "$PKG_MGR" in
+    apt-get) have dpkg && echo dpkg ;;
+    dnf|yum|zypper) have rpm && echo rpm ;;
+    apk) have apk && echo apk ;;
+    pacman) have pacman && echo pacman ;;
+    *) return 1 ;;
+  esac
+}
+
+# pkg_owns PATH -> true when an installed package owns PATH. On merged-/usr
+# systems dpkg may know /usr/bin/x as /bin/x, so both spellings are tried.
+pkg_owns() {
+  local p="$1" alt=""
+  case "$p" in /usr/bin/*|/usr/sbin/*|/usr/lib/*|/usr/lib64/*) alt="${p#/usr}" ;; esac
+  case "$(_pkg_owner_tool)" in
+    dpkg) q dpkg -S "$p" >/dev/null || { [ -n "$alt" ] && q dpkg -S "$alt" >/dev/null; } ;;
+    rpm) q rpm -qf "$p" >/dev/null || { [ -n "$alt" ] && q rpm -qf "$alt" >/dev/null; } ;;
+    apk) q apk info --who-owns "$p" | grep -q 'is owned by' ;;
+    pacman) q pacman -Qo "$p" >/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
 mod_security() {
   # SEC-001 brute-force protection
   if unit_active fail2ban || { have fail2ban-client && [ "$IS_ROOT" -eq 1 ] && q fail2ban-client ping | grep -q pong; }; then
@@ -68,40 +93,51 @@ mod_security() {
     fi
   fi
 
-  # SEC-004 SUID binaries outside the known list
+  # SEC-004 SUID binaries not owned by a package (name list only as a fallback)
   if [ "$IS_ROOT" -ne 1 ]; then
     skip SEC-004 "unexpected SUID binaries" "needs root for a complete search"
   else
-    local s base odd=() bad=() known=" ${_SUID_KNOWN//$'\n'/ } "
+    local s base odd=() bad=() known=" ${_SUID_KNOWN//$'\n'/ } " how="package database"
+    _pkg_owner_tool >/dev/null || how="name list (no package ownership tool for $PKG_MGR)"
     while IFS= read -r s; do
       [ -z "$s" ] && continue
       base="${s##*/}"
       case "$s" in /tmp/*|/var/tmp/*|/dev/shm/*|/home/*|/var/www/*) bad+=("$s"); continue ;; esac
-      case "$known" in *" $base "*) continue ;; esac
+      if _pkg_owner_tool >/dev/null; then
+        pkg_owns "$s" && continue
+      else
+        case "$known" in *" $base "*) continue ;; esac
+      fi
       odd+=("$s")
     done < <(if fx_set SUID; then fx SUID; else t 90 find / -xdev \( -path /proc -o -path /sys -o -path /run \) -prune -o -type f -perm -4000 -print 2>/dev/null; fi)
     if [ "${#bad[@]}" -gt 0 ]; then
       fail SEC-004 "SUID binaries in writable/user locations: $(trunc_list 4 "${bad[@]}")" "classic privilege-escalation backdoor" "sudo chmod u-s PATH and investigate how it got there"
     elif [ "${#odd[@]}" -gt 0 ]; then
-      warn SEC-004 "SUID binaries not in the known list: $(trunc_list 5 "${odd[@]}")" "each SUID root binary is a privilege-escalation candidate; verify it belongs to a package" "dpkg -S PATH  /  rpm -qf PATH; remove the bit if unneeded: sudo chmod u-s PATH"
+      warn SEC-004 "SUID binaries not owned by any package: $(trunc_list 5 "${odd[@]}")" "each SUID root binary is a privilege-escalation candidate; one that no package installed (checked with the $how) needs an explanation" "dpkg -S PATH  /  rpm -qf PATH; remove the bit if unneeded: sudo chmod u-s PATH"
     else
-      ok SEC-004 "no unexpected SUID binaries on /" ""
+      ok SEC-004 "no unexpected SUID binaries on /" "checked against the $how"
     fi
   fi
 
-  # SEC-005 /tmp and /dev/shm mount options
-  local opts mp nox=()
+  # SEC-005 /tmp mount options. /dev/shm without noexec is the default on
+  # Debian/Ubuntu and many others, so it is reported in the detail, not as a WARN.
+  local opts mp tmp_issue="" shm_note=""
   for mp in /tmp /dev/shm; do
     opts="$(awk -v m="$mp" '$2==m{print $4}' "${NOSY_PROC_MOUNTS:-/proc/mounts}" 2>/dev/null | tail -n1)"
-    if [ -z "$opts" ]; then nox+=("$mp (not a separate mount)"); continue; fi
-    case ",$opts," in *,noexec,*) ;; *) nox+=("$mp (no noexec)") ;; esac
+    case "$mp:,$opts," in
+      /tmp:,,) tmp_issue="/tmp is not a separate mount" ;;
+      /tmp:*,noexec,*) ;;
+      /tmp:*) tmp_issue="/tmp is mounted without noexec" ;;
+      /dev/shm:*,noexec,*) ;;
+      /dev/shm:*) shm_note="/dev/shm allows exec (distro default); harden with 'tmpfs /dev/shm tmpfs defaults,nosuid,nodev,noexec 0 0' if nothing needs it" ;;
+    esac
   done
   if [ "$VIRT_KIND" = "container" ]; then
     skip SEC-005 "/tmp noexec" "mounts managed by the container runtime"
-  elif [ "${#nox[@]}" -gt 0 ]; then
-    warn SEC-005 "temp dirs allow execution: $(join ', ' "${nox[@]}")" "web exploits typically drop and run payloads from /tmp or /dev/shm (note: some installers need exec on /tmp)" "add 'tmpfs /tmp tmpfs defaults,nosuid,nodev,noexec 0 0' to /etc/fstab (or systemctl enable tmp.mount) and reboot"
+  elif [ -n "$tmp_issue" ]; then
+    warn SEC-005 "temp dir allows execution: $tmp_issue" "web exploits typically drop and run payloads from /tmp (note: some installers need exec on /tmp)${shm_note:+; also: $shm_note}" "add 'tmpfs /tmp tmpfs defaults,nosuid,nodev,noexec 0 0' to /etc/fstab (or systemctl enable tmp.mount) and reboot"
   else
-    ok SEC-005 "/tmp and /dev/shm mounted noexec" ""
+    ok SEC-005 "/tmp mounted noexec" "$shm_note"
   fi
 
   # SEC-006 fstab entries that can block boot
