@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/bash-4%2B-C9A2A6?style=flat-square&logo=gnubash&logoColor=white" alt="bash 4+">
   <img src="https://img.shields.io/badge/mode-read--only-A3B18A?style=flat-square" alt="read-only">
   <img src="https://img.shields.io/badge/debian%20%C2%B7%20rhel%20%C2%B7%20alpine%20%C2%B7%20arch-B8A9C9?style=flat-square&logo=linux&logoColor=white" alt="distros">
-  <img src="https://img.shields.io/badge/shellcheck-passing-A3B18A?style=flat-square" alt="shellcheck">
+  <a href="https://github.com/trizdev/nosycat-toolkit/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/trizdev/nosycat-toolkit/ci.yml?branch=main&style=flat-square&label=shellcheck%20%2B%20tests" alt="ci status"></a>
   <img src="https://img.shields.io/badge/license-MIT-E9D8A6?style=flat-square" alt="MIT license">
 </p>
 
@@ -62,17 +62,25 @@ You just deployed a VPS. It boots, SSH works, the app is up. Then, weeks later, 
 - **nothing leaves the server.** No network calls besides a DNS lookup of `example.com` and whatever your package manager does when queried.
 - **works without root,** with reduced visibility: checks that need root are marked `SKIP` instead of guessing.
 
-Read the code before running anything with `sudo`, this one included. It is about 1,700 lines of plain Bash.
+Read the code before running anything with `sudo`, this one included. It is about 2,100 lines of plain Bash.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
 #### quick start
 
+Run a tagged release, not `main`: a release is a fixed, reviewed snapshot with a published checksum, while `main` can change under you between reading the code and running it with `sudo`.
+
 ```bash
-git clone https://github.com/trizdev/nosycat-toolkit.git
-cd nosycat-toolkit
+VER=0.1.1
+BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
+curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz"
+curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz.sha256"
+sha256sum -c "nosycat-toolkit-$VER.tar.gz.sha256"     # must print: OK
+tar xzf "nosycat-toolkit-$VER.tar.gz" && cd "nosycat-toolkit-$VER"
 sudo ./nosycat.sh
 ```
+
+The checksum guards against a corrupted or swapped download; compare it with the one on the [release page](https://github.com/trizdev/nosycat-toolkit/releases) too. Hacking on it instead? `git clone` the repo and run `./nosycat.sh` from your checkout.
 
 ```bash
 sudo ./nosycat.sh --only access,network,docker     # just a few modules
@@ -90,7 +98,7 @@ sudo ./nosycat.sh --diff                            # later: what changed?
 > fabricated example for documentation (host `web-01.example.com`, address from the `192.0.2.0/24` documentation range). Abridged.
 
 ```
-  v0.1.0 · host web-01.example.com · 2026-11-16 18:02 UTC · read-only
+  v0.1.1 · host web-01.example.com · 2026-11-16 18:02 UTC · read-only
 
 ❀ environment
   [OK]   ENV-001  distribution: Ubuntu 24.04.1 LTS
@@ -114,7 +122,8 @@ sudo ./nosycat.sh --diff                            # later: what changed?
   [OK]   SSH-006  non-root admin user(s): deploy
 
 ❀ network
-  [WARN] NET-001  2 service(s) listening on all interfaces: 80/tcp(nginx), 443/tcp(nginx)
+  [OK]   NET-001  only SSH and the web server listen on public interfaces
+                  why: web server on 80/443 is expected: 80/tcp(nginx), 443/tcp(nginx)
   [OK]   NET-002  host firewall active: ufw
 
 ❀ docker
@@ -127,7 +136,7 @@ sudo ./nosycat.sh --diff                            # later: what changed?
   [OK]   DB-001   databases bound to loopback only: postgresql on 127.0.0.1:5432
 
 .·:*¨¨* ❀ *¨¨*:·.
-  summary: 41 OK · 9 WARN · 2 FAIL · 15 SKIP
+  summary: 42 OK · 8 WARN · 2 FAIL · 15 SKIP
   fix the FAIL items first; they are the ones that usually bite right after deploy.
 ```
 
@@ -160,14 +169,29 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 |---|---|
 | `text` | colored terminal output, printed as checks run (default) |
 | `md` | Markdown report with an environment table and one table per module |
-| `json` | `{tool, version, host, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` |
+| `json` | `{tool, version, host, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` (plus `original_status` and `ignore_reason` when ignored) |
 
 | exit code | meaning |
 |---|---|
-| `0` | everything OK (SKIPs do not count) |
+| `0` | everything OK (SKIPs and IGNOREDs do not count) |
 | `1` | at least one WARN |
 | `2` | at least one FAIL |
 | `3` | usage error or missing baseline |
+
+<p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
+
+#### accepted findings (`.nosycat.ignore`)
+
+Some WARNs are deliberate on your server. List them once and they stop turning every run into exit 1:
+
+```
+# /var/lib/nosycat/.nosycat.ignore  (read automatically; or pass --ignore FILE)
+NET-001: grafana on 3000 is behind the provider firewall
+SEC-005: the installer needs exec on /tmp
+SNP-*
+```
+
+One check id per line, optionally `: reason`; globs like `SNP-*` work. Matching WARN/FAIL results are shown as `IGNORED` with your reason, kept in the JSON with their original status, and left out of the exit code. A web server on 80/443 and `/dev/shm` without `noexec` (the Debian default) no longer warn, so most servers need few entries.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -202,13 +226,25 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 
 #### roadmap
 
-- [ ] config file to silence accepted findings (`.nosycat.ignore`)
+- [x] config file to silence accepted findings (`.nosycat.ignore`)
 - [ ] JSON lines output (one event per check) for SIEM ingestion
 - [ ] Podman and rootless Docker checks
 - [ ] backup presence and age (restic, borg, provider snapshots)
 - [ ] kernel hardening sysctl profile (`kptr_restrict`, `dmesg_restrict`, `rp_filter`)
 - [ ] remote mode over SSH for several hosts
-- [ ] bats test suite with fixture configs
+- [x] bats test suite with fixture configs
+
+<p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
+
+#### tests
+
+The parsers and checks are tested with [bats](https://github.com/bats-core/bats-core) against fixture files (`tests/fixtures`: nft rulesets, `ss` output, `sshd -T`, certificates, mounts) and small fake commands (`tests/stubs`: `docker`, `redis-cli`, `dpkg`). The `NOSY_FX_*` and `NOSY_ETC` variables point nosycat at those fixtures; normal runs never set them.
+
+```bash
+bats tests/
+```
+
+CI runs ShellCheck, the bats suite on Ubuntu, Debian, Rocky Linux and Alpine, and a full read-only run in each of those containers.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 

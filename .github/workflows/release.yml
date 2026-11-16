@@ -1,0 +1,55 @@
+name: release
+
+# Runs only when a v* tag is pushed. Publishes nosycat-toolkit-X.Y.Z.tar.gz and
+# its .sha256 to a GitHub release, after the same lint and tests as ci.yml.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: bats-core/bats-core
+          ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1
+          path: .bats
+
+      - name: tag matches NOSY_VERSION and a dated CHANGELOG entry
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          grep -qx "NOSY_VERSION=\"$ver\"" lib/common.sh || { echo "::error::$GITHUB_REF_NAME does not match NOSY_VERSION in lib/common.sh"; exit 1; }
+          line="$(grep -m1 "^## \[$ver\]" CHANGELOG.md)" || { echo "::error::CHANGELOG.md has no [$ver] section"; exit 1; }
+          case "$line" in *Unreleased*) echo "::error::CHANGELOG [$ver] is still marked Unreleased; date it before tagging"; exit 1 ;; esac
+
+      - name: shellcheck + bats
+        run: |
+          shellcheck -x nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*
+          .bats/bin/bats tests/
+
+      - name: build tarball and checksum
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          name="nosycat-toolkit-$ver"
+          git archive --format=tar.gz --prefix="$name/" -o "$name.tar.gz" "$GITHUB_REF_NAME"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+          awk -v v="$ver" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          # shellcheck disable=SC2016  # literal Markdown code fence
+          printf '\n**sha256**\n\n```\n%s\n```\n' "$(cat "$name.tar.gz.sha256")" >> notes.md
+
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "nosycat-toolkit $ver" --notes-file notes.md \
+            "nosycat-toolkit-$ver.tar.gz" "nosycat-toolkit-$ver.tar.gz.sha256"

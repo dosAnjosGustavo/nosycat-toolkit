@@ -63,8 +63,8 @@ load helpers
   bash "$NOSY_SRC/nosycat.sh" --snapshot --state-dir "$st" >/dev/null 2>&1
   # the comm stub sleeps, so the run is caught after mod_snapshot made its temp dir
   MKTEMP_STUB_DIR="$td" COMM_STUB_SLEEP=2 bash "$NOSY_SRC/nosycat.sh" --diff --state-dir "$st" >/dev/null 2>&1 &
-  local pid=$! i
-  for i in $(seq 50); do [ -n "$(ls -A "$td")" ] && break; sleep 0.1; done
+  local pid=$!
+  for _ in $(seq 50); do [ -n "$(ls -A "$td")" ] && break; sleep 0.1; done
   [ -n "$(ls -A "$td")" ]
   kill -TERM "$pid"
   wait "$pid" || true

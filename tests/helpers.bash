@@ -2,6 +2,7 @@
 # Sources the libraries and modules (not nosycat.sh, which would run a scan)
 # so each test can call one detector or module against fixture files.
 # shellcheck shell=bash
+# shellcheck disable=SC2034,SC1091  # globals are read by the sourced code; paths resolve at runtime
 
 NOSY_SRC="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 FIX="$BATS_TEST_DIRNAME/fixtures"
