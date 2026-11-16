@@ -62,6 +62,8 @@ usage: sudo ./nosycat.sh [options]
   --diff              compare the server against the saved baseline
   --state-dir DIR     baseline location (default: /var/lib/nosycat as root,
                       ~/.local/state/nosycat otherwise)
+  --ignore FILE       accepted findings to report as IGNORED (repeatable);
+                      STATE_DIR/.nosycat.ignore is always read if present
   --timeout SECS      per-command timeout (default: $NOSY_TIMEOUT)
   --list              list modules and exit
   -h, --help          show this help
@@ -70,12 +72,13 @@ usage: sudo ./nosycat.sh [options]
 modules: ${ALL_MODULES[*]}
 
 exit codes: 0 all OK · 1 WARN present · 2 FAIL present · 3 usage/runtime error
+            (IGNORED and SKIP results do not affect the exit code)
 USAGE
 }
 
 die_usage() { echo "nosycat: $*" >&2; echo "try: ./nosycat.sh --help" >&2; exit 3; }
 
-ONLY="" SKIP_LIST="" OUTDIR="" MODE="check" STATE_DIR=""
+ONLY="" SKIP_LIST="" OUTDIR="" MODE="check" STATE_DIR="" IGNORE_FILES=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --only) [ -n "${2:-}" ] || die_usage "--only needs a value"; ONLY="$2"; shift 2 ;;
@@ -88,6 +91,8 @@ while [ $# -gt 0 ]; do
     --output=*) OUTDIR="${1#*=}"; shift ;;
     --state-dir) [ -n "${2:-}" ] || die_usage "--state-dir needs a directory"; STATE_DIR="$2"; shift 2 ;;
     --state-dir=*) STATE_DIR="${1#*=}"; shift ;;
+    --ignore) [ -n "${2:-}" ] || die_usage "--ignore needs a file"; IGNORE_FILES+=("$2"); shift 2 ;;
+    --ignore=*) IGNORE_FILES+=("${1#*=}"); shift ;;
     --timeout) [[ "${2:-}" =~ ^[0-9]+$ ]] || die_usage "--timeout needs seconds"; NOSY_TIMEOUT="$2"; shift 2 ;;
     --no-color) USE_COLOR=0; shift ;;
     --snapshot) [ "$MODE" = "diff" ] && die_usage "--snapshot and --diff are exclusive"; MODE="snapshot"; shift ;;
@@ -104,6 +109,13 @@ case "$FORMAT" in text|md|json) ;; *) die_usage "invalid --format '$FORMAT' (tex
 if [ -z "$STATE_DIR" ]; then
   if [ "$IS_ROOT" -eq 1 ]; then STATE_DIR="/var/lib/nosycat"; else STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nosycat"; fi
 fi
+
+if [ -f "$STATE_DIR/.nosycat.ignore" ]; then
+  load_ignore_file "$STATE_DIR/.nosycat.ignore" || die_usage "cannot read $STATE_DIR/.nosycat.ignore"
+fi
+for f in "${IGNORE_FILES[@]}"; do
+  load_ignore_file "$f" || die_usage "cannot read ignore file: $f"
+done
 
 _valid_mod() { local m; for m in "${ALL_MODULES[@]}"; do [ "$m" = "$1" ] && return 0; done; return 1; }
 
@@ -125,6 +137,11 @@ fi
 [ "${#RUN[@]}" -gt 0 ] || die_usage "no modules left to run"
 
 if [ -n "$OUTDIR" ] && ! mkdir -p "$OUTDIR" 2>/dev/null; then die_usage "cannot create output dir: $OUTDIR"; fi
+
+# Remove temp dirs on any exit, including Ctrl-C and kill.
+trap nosy_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 setup_colors
 detect_all
@@ -165,6 +182,4 @@ if [ -n "$OUTDIR" ]; then
   echo "nosycat: report written to $outfile" >&2
 fi
 
-if [ "$(count_status FAIL)" -gt 0 ]; then exit 2
-elif [ "$(count_status WARN)" -gt 0 ]; then exit 1
-else exit 0; fi
+exit "$(final_exit_code)"
