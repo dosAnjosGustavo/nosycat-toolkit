@@ -1,0 +1,7 @@
+port 22
+port 2222
+listenaddress [::]:2222
+listenaddress 0.0.0.0:2222
+listenaddress 0.0.0.0:22
+passwordauthentication no
+permitrootlogin no

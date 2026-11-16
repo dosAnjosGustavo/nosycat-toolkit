@@ -1,0 +1,12 @@
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iif "lo" accept
+		jump my_filter
+	}
+
+	chain my_filter {
+		tcp dport 22 accept
+		reject with icmpx admin-prohibited
+	}
+}

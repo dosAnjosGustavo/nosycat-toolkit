@@ -55,17 +55,57 @@ mod_databases() {
     ok DB-001 "no database/cache ports listening" ""
   fi
 
-  # DB-002 Redis without authentication
-  if have redis-cli && printf '%s\n' "${pub[@]}" "${priv[@]}" "${lo[@]}" | grep -q '^redis'; then
-    if [ "$(q redis-cli -h 127.0.0.1 ping)" = "PONG" ]; then
-      local sev=warn; [ "${#pub[@]}" -gt 0 ] && printf '%s\n' "${pub[@]}" | grep -q '^redis' && sev=fail
-      "$sev" DB-002 "Redis answers without a password" "any process (or the internet, if exposed) can read data or write files via CONFIG SET" "set 'requirepass' or ACL users in redis.conf and restart redis"
-    else
-      ok DB-002 "Redis requires authentication" ""
+  # DB-002 Redis without authentication, probed on the address it listens on
+  _db_redis_auth
+}
+
+# _redis_target -> "scope host port" of the most exposed Redis listener, or nothing.
+_redis_target() {
+  local l proto host port proc scope best="" rank=0 r
+  for l in "${LISTENERS[@]}"; do
+    read -r proto host port proc <<<"$l"
+    [ "$proto" = "tcp" ] || continue
+    if [ "$port" != "6379" ]; then
+      [ "$proc" = "-" ] && continue
+      printf '%s' "$proc" | grep -qE '^(redis-server|valkey-server|valkey)$' || continue
     fi
-  elif printf '%s\n' "${pub[@]}" "${priv[@]}" "${lo[@]}" | grep -q '^redis'; then
-    skip DB-002 "Redis authentication" "redis detected but redis-cli is not installed"
-  else
-    skip DB-002 "Redis authentication" "redis not detected"
+    scope="$(addr_scope "$host")"
+    case "$scope" in any|public) r=3 ;; private) r=2 ;; *) r=1 ;; esac
+    if [ "$r" -gt "$rank" ]; then rank="$r"; best="$scope $host $port"; fi
+  done
+  printf '%s' "$best"
+}
+
+_db_redis_auth() {
+  local target scope host port cli="" reply rc
+  target="$(_redis_target)"
+  if [ -z "$target" ]; then skip DB-002 "Redis authentication" "redis not detected"; return; fi
+  read -r scope host port <<<"$target"
+  # A wildcard bind also answers on loopback; use the matching family.
+  case "$host" in 0.0.0.0|'*'|'') host="127.0.0.1" ;; ::) host="::1" ;; esac
+  if have redis-cli; then cli="redis-cli"; elif have valkey-cli; then cli="valkey-cli"; fi
+  if [ -z "$cli" ]; then
+    skip DB-002 "Redis authentication" "redis detected on $host:$port but redis-cli is not installed"
+    return
   fi
+  # Ignore any REDISCLI_AUTH in the caller's environment: we want the anonymous answer.
+  reply="$(t "$NOSY_TIMEOUT" env -u REDISCLI_AUTH "$cli" -h "$host" -p "$port" ping 2>&1)"; rc=$?
+  reply="$(printf '%s' "$reply" | head -n1)"
+  case "$reply" in
+    PONG)
+      if [ "$scope" = "any" ] || [ "$scope" = "public" ]; then
+        fail DB-002 "Redis on $host:$port answers without a password" "Redis listens on a public interface: anyone can read data or write files via CONFIG SET" "set 'requirepass' or ACL users in redis.conf, bind 127.0.0.1, and restart redis"
+      else
+        warn DB-002 "Redis on $host:$port answers without a password" "any local process (or host on the private network) can read data or write files via CONFIG SET" "set 'requirepass' or ACL users in redis.conf and restart redis"
+      fi ;;
+    *NOAUTH*|*noauth*)
+      ok DB-002 "Redis on $host:$port requires authentication" "" ;;
+    *DENIED*)
+      warn DB-002 "Redis on $host:$port has no password (protected mode is blocking us)" "protected mode only refuses non-loopback clients while no password is set; turning it off or binding elsewhere exposes the data" "set 'requirepass' or ACL users in redis.conf and restart redis" ;;
+    *)
+      local why="no reply"
+      [ "$rc" -eq 124 ] && why="timed out"
+      [ -n "$reply" ] && why="$reply"
+      skip DB-002 "Redis authentication" "could not connect to $host:$port ($why); cannot tell whether auth is required" ;;
+  esac
 }

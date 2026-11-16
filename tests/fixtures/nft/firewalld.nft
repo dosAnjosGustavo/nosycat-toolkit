@@ -1,0 +1,19 @@
+table inet firewalld {
+	chain filter_INPUT {
+		type filter hook input priority filter + 10; policy accept;
+		ct state { established, related } accept
+		ct status dnat accept
+		iifname "lo" accept
+		ct state invalid drop
+		jump filter_INPUT_ZONES
+		reject with icmpx admin-prohibited
+	}
+
+	chain filter_INPUT_ZONES {
+		goto filter_IN_public
+	}
+
+	chain filter_IN_public {
+		tcp dport 22 accept
+	}
+}

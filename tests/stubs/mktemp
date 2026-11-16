@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake mktemp: fails when $MKTEMP_STUB_FAIL=1, otherwise creates the dir under $MKTEMP_STUB_DIR.
+[ "${MKTEMP_STUB_FAIL:-0}" = 1 ] && { echo "mktemp: failed to create directory" >&2; exit 1; }
+exec /usr/bin/env -u MKTEMP_STUB_FAIL "$(PATH=/usr/bin:/bin command -v mktemp)" -p "${MKTEMP_STUB_DIR:-/tmp}" "$@"

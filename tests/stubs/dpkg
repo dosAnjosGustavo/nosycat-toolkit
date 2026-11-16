@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake dpkg -S: paths listed in $DPKG_STUB_OWNED belong to package "stubpkg".
+[ "$1" = "-S" ] || exit 2
+if grep -qxF -- "$2" "${DPKG_STUB_OWNED:-/dev/null}"; then echo "stubpkg: $2"; exit 0; fi
+echo "dpkg-query: no path found matching pattern $2" >&2; exit 1

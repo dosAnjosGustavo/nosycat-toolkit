@@ -1,6 +1,6 @@
 # checks
 
-Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). Fix commands are suggestions printed by the tool. nosycat never runs them.
+Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). `IGNORED` replaces a `WARN`/`FAIL` you accepted in an ignore file (see the end of this page). Fix commands are suggestions printed by the tool. nosycat never runs them.
 
 #### environment
 
@@ -20,7 +20,7 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 | CLD-001 | hostname is not a provider default (`vmi123`, `ip-10-0-0-1`, `ubuntu-s-1vcpu…`) | generic names make logs and alerts ambiguous | WARN | `hostnamectl set-hostname web-01.example.com` |
 | CLD-002 | `cloud-init status` is `done` | errors mean users, keys or packages from user-data may be missing | FAIL | `cloud-init status --long` |
 | CLD-003 | default image users (`ubuntu`, `ec2-user`, `rocky`…) still have a login shell | well-known usernames are brute-forced first | WARN | `usermod -L -s /usr/sbin/nologin USER` |
-| CLD-004 | `sshd_config.d/*.conf` drop-in sets `PasswordAuthentication yes` | cloud-init drop-ins override `sshd_config`, so editing it alone does nothing | WARN | edit the drop-in, reload sshd |
+| CLD-004 | `sshd_config.d/*.conf` drop-in sets `PasswordAuthentication yes` **and** that is the effective value (`sshd -T`, or the parsed config with first-value-wins). A drop-in `yes` overridden by an earlier `no` (e.g. `00-hardening.conf`) is OK | cloud-init drop-ins override `sshd_config`, so editing it alone does nothing | WARN | edit the drop-in, reload sshd (`ssh` on Debian/Ubuntu, `sshd` on RHEL, `rc-service sshd` on OpenRC) |
 | CLD-005 | keys in `/root/.ssh/authorized_keys` | deploy-time keys tend to stay forever | WARN | `ssh-keygen -lf /root/.ssh/authorized_keys` |
 
 #### system
@@ -48,7 +48,7 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 | SSH-002 | `PasswordAuthentication no` (and no PAM keyboard-interactive) | password SSH is brute-forced within minutes | FAIL | `PasswordAuthentication no`, reload sshd |
 | SSH-003 | `PermitRootLogin` | `yes` = root by password; `prohibit-password` = root by key | FAIL | `PermitRootLogin no` after creating a sudo user |
 | SSH-004 | `PermitEmptyPasswords no` | accounts without password could log in | FAIL | `PermitEmptyPasswords no` |
-| SSH-005 | SSH port | informational; port 22 is fine with key-only auth | info | none |
+| SSH-005 | SSH port(s): every `Port` and `ListenAddress host:port` | informational; port 22 is fine with key-only auth | info | none |
 | SSH-006 | a non-root member of sudo/wheel/admin or sudoers exists | no audit trail; root login cannot be disabled | WARN | `adduser deploy && usermod -aG sudo deploy` |
 | SSH-007 | home, `~/.ssh`, `authorized_keys` not group/world-writable, correct owner | StrictModes silently ignores keys → lockout | FAIL | `chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys` |
 | SSH-008 | login accounts that never logged in (`lastlog`/`lastlog2`) | forgotten accounts are attack surface | WARN | lock or remove the account |
@@ -58,8 +58,8 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 
 | id | what | why it matters | severity | fix |
 |---|---|---|---|---|
-| NET-001 | sockets on `0.0.0.0` / `::` / public IPs, excluding SSH and DHCP | everything bound there is internet-reachable unless filtered | WARN | bind to 127.0.0.1 or filter |
-| NET-002 | host firewall active (ufw, firewalld, nftables, iptables) | FAIL when services are exposed and nothing filters them | FAIL | `ufw allow OpenSSH && ufw enable` |
+| NET-001 | sockets on `0.0.0.0` / `::` / public IPs, excluding SSH (all its ports) and DHCP. A web server (nginx, apache, caddy, traefik, haproxy, lighttpd, envoy) on tcp 80/443 is expected and only listed in the detail | everything bound there is internet-reachable unless filtered | WARN | bind to 127.0.0.1 or filter |
+| NET-002 | host firewall active (ufw, firewalld, nftables, iptables). For nftables/iptables only chains hooked on **input** count: a `policy drop`, or a drop/reject rule in that chain or in a chain it jumps to. Drops elsewhere (Docker's `DOCKER-ISOLATION-*` on FORWARD) and a lone `ct state invalid drop` do not | FAIL when services are exposed and nothing filters them | FAIL | `ufw allow OpenSSH && ufw enable` |
 | NET-003 | IPv6 covered by the firewall when a global IPv6 exists | ufw `IPV6=no` or ip-only nft tables leave IPv6 wide open | FAIL | `IPV6=yes` / `table inet` |
 | NET-004 | nameserver configured and `example.com` resolves | updates, ACME and outbound APIs fail | FAIL | check resolv.conf / resolved |
 | NET-005 | `net.ipv4.ip_forward` (expected with Docker/VPN) | a plain VPS should not route packets | WARN | `net.ipv4.ip_forward=0` |
@@ -84,7 +84,7 @@ Skipped entirely when Docker is not installed.
 | DKR-002 | members of the `docker` group | docker group = root | WARN | `gpasswd -d USER docker` |
 | DKR-003 | privileged containers | isolation disabled | FAIL | use `cap_add`/`devices` |
 | DKR-004 | `docker.sock` mounted into containers | socket access = root on host | WARN | socket proxy or remove |
-| DKR-005 | ports published on `0.0.0.0`/`::` | Docker's iptables rules bypass ufw/firewalld | FAIL (with ufw/firewalld) | publish `127.0.0.1:PORT:PORT` |
+| DKR-005 | ports published on `0.0.0.0`/`::` | Docker DNATs published ports before INPUT, bypassing ufw/firewalld/nftables/iptables | FAIL (with an active host firewall); WARN without one (NET-002 already FAILs) | publish `127.0.0.1:PORT:PORT`, or filter in `DOCKER-USER` |
 | DKR-006 | restart policy set | container stays down after reboot | WARN | `restart: unless-stopped` |
 | DKR-007 | json-file log `max-size` (per container or daemon.json) | logs fill the disk | WARN | `log-opts` in daemon.json |
 
@@ -105,7 +105,7 @@ Skipped entirely when Docker is not installed.
 | WEB-001 | `nginx -t` | next reload takes the site down | FAIL | fix the reported line |
 | WEB-002 | nginx `sites-enabled/default` still enabled | IP scans and unknown Hosts hit the default site | WARN | remove the symlink |
 | WEB-003 | `apachectl -t` / `httpd -t` | next reload fails | FAIL | fix the reported line |
-| WEB-004 | certificates in `/etc/letsencrypt/live` and nginx/apache config expire in < 21 days (`CERT_WARN_DAYS`) | renewal is broken; expired = FAIL | FAIL | `certbot renew --dry-run` |
+| WEB-004 | certificates used by the **enabled** config (`nginx -T` as root, else `nginx.conf`, `conf.d`, `sites-enabled`; apache `sites-enabled`, `conf-enabled`, `conf.d`) expire in < 21 days (`CERT_WARN_DAYS`). `sites-available` is never read. Let's Encrypt lineages no enabled vhost uses are only a WARN | renewal is broken; expired = FAIL | FAIL | `certbot renew --dry-run`; `certbot delete` for leftovers |
 | WEB-005 | certbot timer/cron present | certs silently expire after 90 days | WARN | `systemctl enable --now certbot.timer` |
 
 #### security
@@ -115,8 +115,8 @@ Skipped entirely when Docker is not installed.
 | SEC-001 | fail2ban or CrowdSec running | nothing bans brute-force sources | WARN | install fail2ban or CrowdSec |
 | SEC-002 | SELinux enforcing / AppArmor enabled | compromised services are not confined | WARN | enable the distro's MAC |
 | SEC-003 | world-writable files, and dirs without sticky bit, in `/etc`, `/usr/*bin`, systemd dirs, `/var/www`, `/opt`, `/srv`, `/root` | anyone can alter config or binaries | FAIL (system dirs) | `chmod o-w PATH` |
-| SEC-004 | SUID binaries on `/` outside a known list; SUID in `/tmp`, `/home`, `/var/www` | privilege escalation / backdoor | FAIL (writable dirs) | verify package, `chmod u-s` |
-| SEC-005 | `/tmp` and `/dev/shm` mounted `noexec` | exploits drop and run payloads there | WARN | tmpfs with `noexec` |
+| SEC-004 | SUID binaries on `/` not owned by any package (`dpkg -S`, `rpm -qf`, `apk info --who-owns`, `pacman -Qo`; a built-in name list only when no such tool exists); SUID in `/tmp`, `/home`, `/var/www` | privilege escalation / backdoor | FAIL (writable dirs) | verify package, `chmod u-s` |
+| SEC-005 | `/tmp` mounted `noexec`. `/dev/shm` without `noexec` is the Debian/Ubuntu default, so it is only noted in the detail, not a WARN | exploits drop and run payloads there | WARN | tmpfs with `noexec` |
 | SEC-006 | fstab data mounts without `nofail`, network mounts without `_netdev` | a detached volume drops boot into emergency mode, no SSH | WARN | add `nofail` / `_netdev` |
 
 #### databases
@@ -124,7 +124,18 @@ Skipped entirely when Docker is not installed.
 | id | what | why it matters | severity | fix |
 |---|---|---|---|---|
 | DB-001 | MySQL/MariaDB, PostgreSQL, Redis, MongoDB, Memcached, Elasticsearch, CouchDB, InfluxDB listening beyond loopback (default port or process name) | exposed databases are scanned and ransomed within hours; private-network = WARN | FAIL | bind to 127.0.0.1 and firewall |
-| DB-002 | Redis answers `PING` without auth | data read/write, file writes via `CONFIG SET` | FAIL (if public) | `requirepass` / ACLs |
+| DB-002 | Redis answers `PING` without auth, probed on the host:port it actually listens on. OK only on a `NOAUTH` reply; `DENIED` (protected mode, no password) is a WARN; no connection is a SKIP with the reason | data read/write, file writes via `CONFIG SET` | FAIL (if public) | `requirepass` / ACLs |
+
+#### ignoring accepted findings
+
+Put check ids in `.nosycat.ignore` inside the state dir (`/var/lib/nosycat/.nosycat.ignore` as root) or pass `--ignore FILE` (repeatable). Matching `WARN`/`FAIL` results are reported as `IGNORED` with the reason, keep their original status in JSON (`original_status`, `ignore_reason`), and do not affect the exit code. `OK` and `SKIP` results are never changed.
+
+```
+# one per line: ID, ID: reason, or a glob
+NET-001: grafana on 3000 is behind the provider firewall
+SEC-005: /tmp needs exec for the installer
+SNP-*
+```
 
 #### snapshot (`--diff`)
 

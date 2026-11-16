@@ -95,20 +95,58 @@ detect_provider() {
   fi
 }
 
-# detect_firewall -> sets FW_ACTIVE to the first active frontend found.
+# nft_input_filters -> reads `nft list ruleset` on stdin; exits 0 when some chain
+# hooked on input actually filters: policy drop, or a drop/reject rule in that
+# chain or in a chain it jumps/goes to (same table). Drops elsewhere (e.g.
+# Docker's DOCKER-ISOLATION-* chains, reached from FORWARD) do not count, and
+# neither does a lone "ct state invalid drop".
+nft_input_filters() {
+  awk '
+    function filters(c, depth,   i, n, parts) {
+      if (depth > 8) return 0
+      if (dropper[c]) return 1
+      n = split(jumps[c], parts, " ")
+      for (i = 1; i <= n; i++) if (parts[i] != "" && filters(parts[i], depth + 1)) return 1
+      return 0
+    }
+    /^[[:space:]]*table[[:space:]]/ { tbl = $2 ":" $3; next }
+    /^[[:space:]]*chain[[:space:]]/ { ch = tbl "/" $2; next }
+    ch == "" { next }
+    /^[[:space:]]*}/ { ch = ""; next }
+    /type filter hook input/ {
+      input[ch] = 1
+      if ($0 ~ /policy drop/) dropper[ch] = 1
+      next
+    }
+    /(^|[[:space:]])(jump|goto)[[:space:]]/ {
+      for (i = 1; i < NF; i++) if ($i == "jump" || $i == "goto") jumps[ch] = jumps[ch] " " tbl "/" $(i + 1)
+    }
+    /(^|[[:space:]])(drop|reject)([[:space:]]|$)/ {
+      if ($0 ~ /ct state invalid/) next
+      dropper[ch] = 1
+    }
+    END {
+      for (c in input) if (filters(c, 0)) exit 0
+      exit 1
+    }'
+}
+
+# iptables_input_filters -> reads `iptables -S INPUT`; exits 0 on a DROP/REJECT
+# policy or rule, ignoring a lone "--ctstate INVALID -j DROP".
+iptables_input_filters() {
+  grep -vE -- '--ctstate INVALID|--state INVALID' | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'
+}
+
+# detect_firewall -> sets FW_ACTIVE to the first frontend that filters INPUT.
 detect_firewall() {
   if [ "$IS_ROOT" -ne 1 ]; then
     if unit_active firewalld; then FW_ACTIVE="firewalld"; else FW_ACTIVE="unknown"; fi
     return
   fi
-  if have ufw && q ufw status | grep -q '^Status: active'; then FW_ACTIVE="ufw"; return; fi
-  if have firewall-cmd && [ "$(q firewall-cmd --state)" = "running" ]; then FW_ACTIVE="firewalld"; return; fi
-  if have nft && q nft list ruleset | grep -qE 'hook input.*policy drop|hook input' ; then
-    if q nft list ruleset | grep -qE 'policy drop|drop$|reject'; then FW_ACTIVE="nftables"; return; fi
-  fi
-  if have iptables; then
-    if q iptables -S INPUT | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then FW_ACTIVE="iptables"; return; fi
-  fi
+  if fx_have UFW_STATUS ufw && fx UFW_STATUS ufw status | grep -q '^Status: active'; then FW_ACTIVE="ufw"; return; fi
+  if fx_have FIREWALLD_STATE firewall-cmd && [ "$(fx FIREWALLD_STATE firewall-cmd --state)" = "running" ]; then FW_ACTIVE="firewalld"; return; fi
+  if fx_have NFT nft && fx NFT nft list ruleset | nft_input_filters; then FW_ACTIVE="nftables"; return; fi
+  if fx_have IPTABLES_INPUT iptables && fx IPTABLES_INPUT iptables -S INPUT | iptables_input_filters; then FW_ACTIVE="iptables"; return; fi
   FW_ACTIVE="none"
 }
 

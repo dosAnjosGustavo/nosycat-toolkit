@@ -41,14 +41,21 @@ mod_cloud_init() {
     ok CLD-003 "no default image users with a login shell" ""
   fi
 
-  # cloud-init drop-ins that silently re-enable password login.
+  # cloud-init drop-ins that set password login. sshd keeps the first value it
+  # reads, so a drop-in "yes" only matters when it is also the effective value.
   local f bad=()
-  for f in /etc/ssh/sshd_config.d/*.conf; do
+  for f in "$ETC"/ssh/sshd_config.d/*.conf; do
     [ -r "$f" ] || continue
     if grep -qiE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' "$f"; then bad+=("$f"); fi
   done
   if [ "${#bad[@]}" -gt 0 ]; then
-    warn CLD-004 "sshd drop-in enables password auth: $(join ', ' "${bad[@]}")" "provider/cloud-init drop-ins (e.g. 50-cloud-init.conf) are read before sshd_config and override it, so editing sshd_config alone does nothing" "sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' ${bad[0]} && sudo systemctl reload ssh"
+    _sshd_load
+    local eff="${SSHD_CFG[passwordauthentication]:-yes}"
+    if [ "$eff" = "no" ]; then
+      ok CLD-004 "sshd drop-in password auth is overridden" "$(join ', ' "${bad[@]}") says yes, but the effective value is no (from $SSHD_CFG_SRC)"
+    else
+      warn CLD-004 "sshd drop-in enables password auth: $(join ', ' "${bad[@]}")" "provider/cloud-init drop-ins (e.g. 50-cloud-init.conf) are read before sshd_config and override it, so editing sshd_config alone does nothing" "sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' ${bad[0]} && $(ssh_reload_cmd)"
+    fi
   else
     ok CLD-004 "no sshd drop-in forcing password auth" ""
   fi

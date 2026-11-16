@@ -68,6 +68,7 @@ snapshot_collect() {
 snapshot_save() {
   local base="$STATE_DIR/baseline" tmp
   tmp="$STATE_DIR/.baseline.tmp.$$"
+  NOSY_CLEANUP+=("$tmp")
   umask 077
   if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
     echo "nosycat: cannot create state dir $STATE_DIR (use --state-dir)" >&2; return 3
@@ -95,7 +96,10 @@ _snap_cmp() {
 
 mod_snapshot() {
   local base="$STATE_DIR/baseline"
-  SNAP_NOW="$(mktemp -d 2>/dev/null || echo "/tmp/nosycat.$$")"
+  if ! nosy_mktemp_dir SNAP_NOW; then
+    echo "nosycat: cannot create a private temporary directory (mktemp -d failed); refusing to fall back to a predictable /tmp path" >&2
+    exit 3
+  fi
   snapshot_collect "$SNAP_NOW"
   local created
   created="$(awk -F= '$1=="created"{print $2}' "$base/meta" 2>/dev/null)"
@@ -108,5 +112,5 @@ mod_snapshot() {
   _snap_cmp authorized_keys SNP-006 "SSH authorized keys"
   _snap_cmp packages SNP-007 "installed package count"
   _snap_cmp containers SNP-008 "containers"
-  rm -rf "$SNAP_NOW"
+  rm -rf -- "$SNAP_NOW"
 }

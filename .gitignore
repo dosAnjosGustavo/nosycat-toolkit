@@ -7,3 +7,5 @@ report.json
 state/
 *.tmp
 .DS_Store
+.bats/
+notes.md

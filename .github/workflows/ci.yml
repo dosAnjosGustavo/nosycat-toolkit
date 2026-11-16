@@ -11,11 +11,18 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: bash -n
-        run: for f in nosycat.sh lib/*.sh modules/*.sh; do bash -n "$f"; done
+        run: for f in nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*; do bash -n "$f"; done
       - name: shellcheck
-        run: shellcheck -x nosycat.sh lib/*.sh modules/*.sh
+        run: shellcheck -x nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: bats-core/bats-core
+          ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1
+          path: .bats
+      - name: bats (runner, non-root)
+        run: .bats/bin/bats tests/
 
   run:
     needs: lint
@@ -25,14 +32,20 @@ jobs:
       matrix:
         image: ["ubuntu:24.04", "debian:12", "rockylinux:9", "alpine:3.20"]
     steps:
-      - uses: actions/checkout@v4
-      - name: run nosycat in ${{ matrix.image }}
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: bats-core/bats-core
+          ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1
+          path: .bats
+      - name: bats + run nosycat in ${{ matrix.image }}
         run: |
           docker run --rm -v "$PWD:/src" -w /src "${{ matrix.image }}" sh -c '
             set -e
-            if command -v apk >/dev/null; then apk add --no-cache bash coreutils >/dev/null; fi
-            if command -v dnf >/dev/null; then dnf -y -q install procps-ng iproute findutils >/dev/null || true; fi
-            if command -v apt-get >/dev/null; then apt-get -qq update && apt-get -qq install -y procps iproute2 >/dev/null; fi
+            if command -v apk >/dev/null; then apk add --no-cache bash coreutils jq openssl >/dev/null; fi
+            if command -v dnf >/dev/null; then dnf -y -q install procps-ng iproute findutils jq openssl >/dev/null; fi
+            if command -v apt-get >/dev/null; then apt-get -qq update && apt-get -qq install -y procps iproute2 jq openssl >/dev/null; fi
+            bash .bats/bin/bats tests/
             rc=0; bash ./nosycat.sh --no-color || rc=$?
             echo "text exit code: $rc"; [ "$rc" -le 2 ]
             rc=0; bash ./nosycat.sh --format json > /src/report.json || rc=$?

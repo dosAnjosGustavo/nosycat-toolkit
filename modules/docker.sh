@@ -67,11 +67,14 @@ mod_docker() {
 
   if [ "${#pubs[@]}" -gt 0 ]; then
     mapfile -t pubs < <(printf '%s\n' "${pubs[@]}" | sort -u)
-    if [ "$FW_ACTIVE" = "ufw" ] || [ "$FW_ACTIVE" = "firewalld" ]; then
-      fail DKR-005 "ports published on all interfaces: $(trunc_list 5 "${pubs[@]}")" "Docker writes its own iptables rules, so these ports are public even if $FW_ACTIVE denies them" "publish as '127.0.0.1:8080:80' behind a reverse proxy, or filter in the DOCKER-USER chain"
-    else
-      warn DKR-005 "ports published on all interfaces: $(trunc_list 5 "${pubs[@]}")" "reachable from the internet; host firewall rules do not apply to Docker-published ports" "publish as '127.0.0.1:8080:80' behind a reverse proxy"
-    fi
+    case "$FW_ACTIVE" in
+      ufw|firewalld|nftables|iptables)
+        fail DKR-005 "ports published on all interfaces: $(trunc_list 5 "${pubs[@]}")" "Docker DNATs published ports before the INPUT chain, so they are public even though $FW_ACTIVE filters INPUT" "publish as '127.0.0.1:8080:80' behind a reverse proxy, or filter in the DOCKER-USER chain" ;;
+      none)
+        warn DKR-005 "ports published on all interfaces: $(trunc_list 5 "${pubs[@]}")" "reachable from the internet, and there is no host firewall either (see NET-002)" "publish as '127.0.0.1:8080:80' behind a reverse proxy; when you add a firewall, filter Docker ports in DOCKER-USER" ;;
+      *)
+        warn DKR-005 "ports published on all interfaces: $(trunc_list 5 "${pubs[@]}")" "reachable from the internet; host firewall rules on INPUT do not apply to Docker-published ports" "publish as '127.0.0.1:8080:80' behind a reverse proxy, or filter in the DOCKER-USER chain" ;;
+    esac
   else
     ok DKR-005 "no container ports published on 0.0.0.0/::" ""
   fi
