@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: for f in nosycat.sh lib/*.sh modules/*.sh; do bash -n "$f"; done
+      - name: shellcheck
+        run: shellcheck -x nosycat.sh lib/*.sh modules/*.sh
+
+  run:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:12", "rockylinux:9", "alpine:3.20"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: run nosycat in ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "${{ matrix.image }}" sh -c '
+            set -e
+            if command -v apk >/dev/null; then apk add --no-cache bash coreutils >/dev/null; fi
+            if command -v dnf >/dev/null; then dnf -y -q install procps-ng iproute findutils >/dev/null || true; fi
+            if command -v apt-get >/dev/null; then apt-get -qq update && apt-get -qq install -y procps iproute2 >/dev/null; fi
+            rc=0; bash ./nosycat.sh --no-color || rc=$?
+            echo "text exit code: $rc"; [ "$rc" -le 2 ]
+            rc=0; bash ./nosycat.sh --format json > /src/report.json || rc=$?
+            [ "$rc" -le 2 ]
+            rc=0; bash ./nosycat.sh --format md --only system,network > /dev/null || rc=$?
+            [ "$rc" -le 2 ]
+            bash ./nosycat.sh --snapshot --state-dir /tmp/nosy
+            rc=0; bash ./nosycat.sh --diff --state-dir /tmp/nosy --no-color || rc=$?
+            [ "$rc" -le 2 ]
+            rc=0; bash ./nosycat.sh --bogus 2>/dev/null || rc=$?
+            [ "$rc" -eq 3 ]
+          '
+      - name: validate json report
+        run: jq -e '.summary and (.checks | length > 0)' report.json

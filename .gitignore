@@ -1,0 +1,9 @@
+# reports and baselines produced by local runs
+reports/
+nosycat-*.txt
+nosycat-*.md
+nosycat-*.json
+report.json
+state/
+*.tmp
+.DS_Store
