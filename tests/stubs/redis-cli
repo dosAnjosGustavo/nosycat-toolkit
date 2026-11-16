@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fake redis-cli: logs its arguments, answers with $REDIS_STUB_REPLY.
+[ -n "${STUB_LOG:-}" ] && printf 'redis-cli %s\n' "$*" >>"$STUB_LOG"
+if [ -n "${REDISCLI_AUTH:-}" ]; then echo PONG; exit 0; fi   # would authenticate silently
+printf '%s\n' "${REDIS_STUB_REPLY:-}"
+exit "${REDIS_STUB_RC:-0}"

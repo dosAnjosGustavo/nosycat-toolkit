@@ -1,0 +1,2 @@
+-P INPUT ACCEPT
+-A INPUT -m conntrack --ctstate INVALID -j DROP

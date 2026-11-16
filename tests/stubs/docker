@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake docker CLI: one running container described by $DOCKER_STUB_INSPECT.
+case "$1" in
+  info) exit 0 ;;
+  version) echo 27.3.1 ;;
+  ps) echo 0123456789ab ;;
+  inspect) cat "$DOCKER_STUB_INSPECT" ;;
+  *) exit 1 ;;
+esac

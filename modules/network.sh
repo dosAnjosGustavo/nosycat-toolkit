@@ -61,7 +61,7 @@ mod_network() {
         else fail NET-003 "ufw has IPV6=no but the server has a global IPv6" "every service is reachable over IPv6 bypassing your ufw rules" "sudo sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw && sudo ufw reload"; fi ;;
       firewalld) ok NET-003 "IPv6 filtered by firewalld" "" ;;
       nftables)
-        if q nft list ruleset | grep -qE '^table (inet|ip6) '; then ok NET-003 "IPv6 covered by nftables (inet/ip6 table)" ""
+        if fx NFT nft list ruleset | grep -qE '^table (inet|ip6) '; then ok NET-003 "IPv6 covered by nftables (inet/ip6 table)" ""
         else warn NET-003 "nftables has no inet/ip6 table" "IPv6 traffic may be unfiltered" "use 'table inet filter' instead of 'table ip filter'"; fi ;;
       *)
         if have ip6tables && q ip6tables -S INPUT | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then ok NET-003 "IPv6 filtered by ip6tables" ""

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake comm: optionally sleeps ($COMM_STUB_SLEEP) so a test can interrupt a --diff run.
+[ -n "${COMM_STUB_SLEEP:-}" ] && sleep "$COMM_STUB_SLEEP"
+exec "$(PATH=/usr/bin:/bin command -v comm)" "$@"

@@ -79,7 +79,7 @@ mod_security() {
       case "$s" in /tmp/*|/var/tmp/*|/dev/shm/*|/home/*|/var/www/*) bad+=("$s"); continue ;; esac
       case "$known" in *" $base "*) continue ;; esac
       odd+=("$s")
-    done < <(t 90 find / -xdev \( -path /proc -o -path /sys -o -path /run \) -prune -o -type f -perm -4000 -print 2>/dev/null)
+    done < <(if fx_set SUID; then fx SUID; else t 90 find / -xdev \( -path /proc -o -path /sys -o -path /run \) -prune -o -type f -perm -4000 -print 2>/dev/null; fi)
     if [ "${#bad[@]}" -gt 0 ]; then
       fail SEC-004 "SUID binaries in writable/user locations: $(trunc_list 4 "${bad[@]}")" "classic privilege-escalation backdoor" "sudo chmod u-s PATH and investigate how it got there"
     elif [ "${#odd[@]}" -gt 0 ]; then
@@ -92,7 +92,7 @@ mod_security() {
   # SEC-005 /tmp and /dev/shm mount options
   local opts mp nox=()
   for mp in /tmp /dev/shm; do
-    opts="$(awk -v m="$mp" '$2==m{print $4}' /proc/mounts 2>/dev/null | tail -n1)"
+    opts="$(awk -v m="$mp" '$2==m{print $4}' "${NOSY_PROC_MOUNTS:-/proc/mounts}" 2>/dev/null | tail -n1)"
     if [ -z "$opts" ]; then nox+=("$mp (not a separate mount)"); continue; fi
     case ",$opts," in *,noexec,*) ;; *) nox+=("$mp (no noexec)") ;; esac
   done

@@ -43,11 +43,11 @@ mod_web_tls() {
 
   # WEB-004 certificate expiry
   local certs=() c f d
-  for c in /etc/letsencrypt/live/*/cert.pem; do [ -e "$c" ] && certs+=("$c"); done
-  if [ -d /etc/nginx ]; then
-    while read -r f; do [ -n "$f" ] && certs+=("$f"); done < <(grep -rhoE '^[[:space:]]*ssl_certificate[[:space:]]+[^;]+' /etc/nginx 2>/dev/null | awk '{print $2}' | tr -d '"'"'" | grep -v '\$')
+  for c in "$ETC"/letsencrypt/live/*/cert.pem; do [ -e "$c" ] && certs+=("$c"); done
+  if [ -d "$ETC/nginx" ]; then
+    while read -r f; do [ -n "$f" ] && certs+=("$f"); done < <(grep -rhoE '^[[:space:]]*ssl_certificate[[:space:]]+[^;]+' "$ETC/nginx" 2>/dev/null | awk '{print $2}' | tr -d '"'"'" | grep -v '\$')
   fi
-  for d in /etc/apache2 /etc/httpd; do
+  for d in "$ETC/apache2" "$ETC/httpd"; do
     [ -d "$d" ] || continue
     while read -r f; do [ -n "$f" ] && certs+=("$f"); done < <(grep -rhoiE '^[[:space:]]*SSLCertificateFile[[:space:]]+[^[:space:]]+' "$d" 2>/dev/null | awk '{print $2}' | tr -d '"')
   done

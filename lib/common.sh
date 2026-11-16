@@ -56,6 +56,27 @@ t() {
 # q CMD... -> run with the default timeout, discard stderr.
 q() { t "$NOSY_TIMEOUT" "$@" 2>/dev/null; }
 
+# Fixture hooks for the test suite (tests/*.bats). Production runs never set them.
+#   NOSY_ETC=DIR          read config files from DIR instead of /etc
+#   NOSY_FX_<NAME>=FILE   use FILE as the output of a command instead of running it:
+#     NFT (nft list ruleset), IPTABLES_INPUT / IP6TABLES_INPUT (iptables -S INPUT),
+#     UFW_STATUS, FIREWALLD_STATE, SS (ss -H -tuln -p), SSHD_T (sshd -T),
+#     SSH_UNITS (systemctl list-unit-files ssh.service sshd.service), NGINX_T (nginx -T),
+#     SUID (list of SUID files)
+#   NOSY_FSTAB, NOSY_PROC_MOUNTS  alternative fstab and /proc/mounts
+ETC="${NOSY_ETC:-/etc}"
+
+# fx NAME CMD... -> print the NOSY_FX_NAME fixture if set, otherwise run CMD under q.
+fx() {
+  local v="NOSY_FX_$1"; shift
+  if [ -n "${!v:-}" ]; then cat -- "${!v}" 2>/dev/null; return; fi
+  q "$@"
+}
+# fx_set NAME -> true when a fixture replaces this command.
+fx_set() { local v="NOSY_FX_$1"; [ -n "${!v:-}" ]; }
+# fx_have NAME CMD -> true when the fixture is set or CMD is installed.
+fx_have() { fx_set "$1" || have "$2"; }
+
 # record STATUS ID TITLE [DETAIL] [FIX]
 record() {
   local st="$1" id="$2" title="$3" detail="${4:-}" fix="${5:-}"
@@ -125,7 +146,7 @@ collect_listeners() {
   _LISTENERS_DONE=1
   local line proto local_addr proc host port
   local -a f
-  if have ss; then
+  if fx_have SS ss; then
     while IFS= read -r line; do
       read -r -a f <<<"$line"
       proto="${f[0]}"; local_addr="${f[4]}"; proc=""
@@ -133,7 +154,7 @@ collect_listeners() {
       port="${local_addr##*:}"; host="${local_addr%:*}"
       host="${host#[}"; host="${host%]}"; host="${host%%%*}"
       LISTENERS+=("$proto $host $port ${proc:--}")
-    done < <(q ss -H -tuln -p || q ss -H -tuln)
+    done < <(if fx_set SS; then fx SS; else q ss -H -tuln -p || q ss -H -tuln; fi)
   elif have netstat; then
     while IFS= read -r line; do
       read -r -a f <<<"$line"

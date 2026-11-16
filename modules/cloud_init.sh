@@ -43,7 +43,7 @@ mod_cloud_init() {
 
   # cloud-init drop-ins that silently re-enable password login.
   local f bad=()
-  for f in /etc/ssh/sshd_config.d/*.conf; do
+  for f in "$ETC"/ssh/sshd_config.d/*.conf; do
     [ -r "$f" ] || continue
     if grep -qiE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' "$f"; then bad+=("$f"); fi
   done

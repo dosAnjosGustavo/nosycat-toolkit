@@ -101,13 +101,13 @@ detect_firewall() {
     if unit_active firewalld; then FW_ACTIVE="firewalld"; else FW_ACTIVE="unknown"; fi
     return
   fi
-  if have ufw && q ufw status | grep -q '^Status: active'; then FW_ACTIVE="ufw"; return; fi
-  if have firewall-cmd && [ "$(q firewall-cmd --state)" = "running" ]; then FW_ACTIVE="firewalld"; return; fi
-  if have nft && q nft list ruleset | grep -qE 'hook input.*policy drop|hook input' ; then
-    if q nft list ruleset | grep -qE 'policy drop|drop$|reject'; then FW_ACTIVE="nftables"; return; fi
+  if fx_have UFW_STATUS ufw && fx UFW_STATUS ufw status | grep -q '^Status: active'; then FW_ACTIVE="ufw"; return; fi
+  if fx_have FIREWALLD_STATE firewall-cmd && [ "$(fx FIREWALLD_STATE firewall-cmd --state)" = "running" ]; then FW_ACTIVE="firewalld"; return; fi
+  if fx_have NFT nft && fx NFT nft list ruleset | grep -qE 'hook input.*policy drop|hook input' ; then
+    if fx NFT nft list ruleset | grep -qE 'policy drop|drop$|reject'; then FW_ACTIVE="nftables"; return; fi
   fi
-  if have iptables; then
-    if q iptables -S INPUT | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then FW_ACTIVE="iptables"; return; fi
+  if fx_have IPTABLES_INPUT iptables; then
+    if fx IPTABLES_INPUT iptables -S INPUT | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then FW_ACTIVE="iptables"; return; fi
   fi
   FW_ACTIVE="none"
 }

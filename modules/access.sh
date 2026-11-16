@@ -18,7 +18,7 @@ _sshd_parse_file() {
     if [ "$k" = "match" ]; then return 1; fi
     if [ "$k" = "include" ]; then
       for inc in $v; do
-        case "$inc" in /*) ;; *) inc="/etc/ssh/$inc" ;; esac
+        case "$inc" in /etc/*) inc="$ETC/${inc#/etc/}" ;; /*) ;; *) inc="$ETC/ssh/$inc" ;; esac
         local g
         for g in $inc; do _sshd_parse_file "$g" || return 1; done
       done
@@ -32,13 +32,13 @@ _sshd_parse_file() {
 _sshd_load() {
   local sshd k v
   sshd="$(command -v sshd 2>/dev/null || { [ -x /usr/sbin/sshd ] && echo /usr/sbin/sshd; })"
-  if [ -n "$sshd" ] && [ "$IS_ROOT" -eq 1 ]; then
+  if fx_set SSHD_T || { [ -n "$sshd" ] && [ "$IS_ROOT" -eq 1 ]; }; then
     while read -r k v; do
       [ -n "$k" ] && [ -z "${SSHD_CFG[$k]+x}" ] && SSHD_CFG[$k]="$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')"
-    done < <(q "$sshd" -T)
+    done < <(fx SSHD_T "$sshd" -T)
     if [ "${#SSHD_CFG[@]}" -gt 0 ]; then SSHD_CFG_SRC="sshd -T"; return 0; fi
   fi
-  _sshd_parse_file /etc/ssh/sshd_config
+  _sshd_parse_file "$ETC/ssh/sshd_config"
   SSHD_CFG_SRC="parsed sshd_config"
   # OpenSSH compiled-in defaults for anything not set.
   : "${SSHD_CFG[passwordauthentication]:=yes}"
@@ -65,7 +65,7 @@ _perm_bad() {
 }
 
 mod_access() {
-  if [ ! -e /etc/ssh/sshd_config ] && ! have sshd && [ ! -x /usr/sbin/sshd ]; then
+  if [ ! -e "$ETC/ssh/sshd_config" ] && ! fx_set SSHD_T && ! have sshd && [ ! -x /usr/sbin/sshd ]; then
     skip SSH-001 "ssh daemon" "OpenSSH server not installed"
   else
     _sshd_load
