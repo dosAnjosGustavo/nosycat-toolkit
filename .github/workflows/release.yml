@@ -16,8 +16,8 @@ jobs:
     permissions:
       contents: write # create the release and upload assets
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: bats-core/bats-core
           ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1

@@ -28,9 +28,11 @@ _sshd_parse_file() {
     k="$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')"
     if [ "$k" = "match" ]; then return 1; fi
     if [ "$k" = "include" ]; then
-      for inc in $v; do
+      # split without globbing first, so the pattern is expanded under $ETC
+      local -a incs; local g
+      read -r -a incs <<<"$v"
+      for inc in "${incs[@]}"; do
         case "$inc" in /etc/*) inc="$ETC/${inc#/etc/}" ;; /*) ;; *) inc="$ETC/ssh/$inc" ;; esac
-        local g
         for g in $inc; do _sshd_parse_file "$g" || return 1; done
       done
       continue

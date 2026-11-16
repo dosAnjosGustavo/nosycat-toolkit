@@ -11,12 +11,12 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: bash -n
         run: for f in nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*; do bash -n "$f"; done
       - name: shellcheck
         run: shellcheck -x nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: bats-core/bats-core
           ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1
@@ -32,8 +32,8 @@ jobs:
       matrix:
         image: ["ubuntu:24.04", "debian:12", "rockylinux:9", "alpine:3.20"]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: bats-core/bats-core
           ref: b640ec3cf2c7c9cfc9e6351479261186f76eeec8 # v1.11.1
