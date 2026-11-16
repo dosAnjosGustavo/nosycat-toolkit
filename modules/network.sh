@@ -4,8 +4,23 @@
 
 _sysctl() { local f="/proc/sys/${1//.//}"; [ -r "$f" ] && cat "$f"; }
 
+# Reverse proxies / web servers that are expected on 80 and 443.
+_WEB_PROCS='^(nginx|apache2|httpd|caddy|traefik|haproxy|lighttpd|envoy|openresty)$'
+
+# _web_expected PROTO PORT PROC -> true for a known web server on tcp 80/443.
+# Without root the process name is hidden ("-"): accept it when one of those
+# servers is running as a systemd unit.
+_web_expected() {
+  [ "$1" = "tcp" ] || return 1
+  case "$2" in 80|443) ;; *) return 1 ;; esac
+  if [ "$3" != "-" ]; then printf '%s' "$3" | grep -qE "$_WEB_PROCS"; return; fi
+  local u
+  for u in nginx apache2 httpd caddy traefik haproxy lighttpd; do unit_active "$u" && return 0; done
+  return 1
+}
+
 mod_network() {
-  local l proto host port proc scope exposed=() sshp
+  local l proto host port proc scope exposed=() web=() sshp
   sshp=" $(ssh_ports 2>/dev/null | tr '\n' ' ') "
 
   # NET-001 listeners on all interfaces / public addresses
@@ -19,15 +34,22 @@ mod_network() {
       case "$sshp" in *" $port "*) [ "$proto" = "tcp" ] && continue ;; esac
       # DHCP clients legitimately listen on 0.0.0.0:68 / [::]:546
       if [ "$proto" = "udp" ] && { [ "$port" = "68" ] || [ "$port" = "546" ]; }; then continue; fi
+      if _web_expected "$proto" "$port" "$proc"; then web+=("$port/$proto($proc)"); continue; fi
       exposed+=("$port/$proto($proc)")
     done
     # de-duplicate (v4 + v6 sockets)
     if [ "${#exposed[@]}" -gt 0 ]; then
       mapfile -t exposed < <(printf '%s\n' "${exposed[@]}" | sort -u | sort -t/ -k1,1n)
     fi
-    local pn=""; [ "$IS_ROOT" -eq 1 ] || pn=" (process names need root)"
+    local pn="" wn=""; [ "$IS_ROOT" -eq 1 ] || pn=" (process names need root)"
+    if [ "${#web[@]}" -gt 0 ]; then
+      mapfile -t web < <(printf '%s\n' "${web[@]}" | sort -u | sort -t/ -k1,1n)
+      wn="web server on 80/443 is expected: $(join ', ' "${web[@]}")"
+    fi
     if [ "${#exposed[@]}" -gt 0 ]; then
-      warn NET-001 "${#exposed[@]} service(s) listening on all interfaces: $(trunc_list 8 "${exposed[@]}")" "anything bound to 0.0.0.0/:: is reachable from the internet unless a firewall blocks it$pn" "bind internal services to 127.0.0.1, or restrict them in the firewall; inspect with: sudo ss -tulnp"
+      warn NET-001 "${#exposed[@]} service(s) listening on all interfaces: $(trunc_list 8 "${exposed[@]}")" "anything bound to 0.0.0.0/:: is reachable from the internet unless a firewall blocks it$pn${wn:+; $wn}" "bind internal services to 127.0.0.1, or restrict them in the firewall; inspect with: sudo ss -tulnp"
+    elif [ -n "$wn" ]; then
+      ok NET-001 "only SSH and the web server listen on public interfaces" "$wn"
     else
       ok NET-001 "only SSH (or nothing) listens on public interfaces" ""
     fi
@@ -64,7 +86,7 @@ mod_network() {
         if fx NFT nft list ruleset | grep -qE '^table (inet|ip6) '; then ok NET-003 "IPv6 covered by nftables (inet/ip6 table)" ""
         else warn NET-003 "nftables has no inet/ip6 table" "IPv6 traffic may be unfiltered" "use 'table inet filter' instead of 'table ip filter'"; fi ;;
       *)
-        if have ip6tables && q ip6tables -S INPUT | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then ok NET-003 "IPv6 filtered by ip6tables" ""
+        if fx_have IP6TABLES_INPUT ip6tables && fx IP6TABLES_INPUT ip6tables -S INPUT | iptables_input_filters; then ok NET-003 "IPv6 filtered by ip6tables" ""
         else warn NET-003 "global IPv6 address without IPv6 firewall rules" "services listening on :: are reachable over IPv6" "enable a firewall that covers IPv6 (ufw IPV6=yes, firewalld, nft inet table)"; fi ;;
     esac
   fi
