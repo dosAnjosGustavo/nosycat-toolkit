@@ -80,6 +80,20 @@ tar xzf "nosycat-toolkit-$VER.tar.gz" && cd "nosycat-toolkit-$VER"
 sudo ./nosycat.sh
 ```
 
+Prefer a single file you can `scp` to the server? Each release also ships `nosycat.sh` with `lib/` and `modules/` inlined (built by `scripts/bundle.sh`, tested in CI to give the same output as the tree):
+
+```bash
+# on your machine
+VER=0.1.1
+BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
+curl -fsSLO "$BASE/nosycat.sh" && curl -fsSLO "$BASE/nosycat.sh.sha256"
+sha256sum -c nosycat.sh.sha256                        # must print: nosycat.sh: OK
+scp nosycat.sh nosycat.sh.sha256 deploy@192.0.2.10:
+
+# on the server
+sha256sum -c nosycat.sh.sha256 && chmod +x nosycat.sh && sudo ./nosycat.sh
+```
+
 The checksum guards against a corrupted or swapped download; compare it with the one on the [release page](https://github.com/trizdev/nosycat-toolkit/releases) too. Hacking on it instead? `git clone` the repo and run `./nosycat.sh` from your checkout.
 
 ```bash
