@@ -52,6 +52,10 @@ jobs:
             [ "$rc" -le 2 ]
             rc=0; bash ./nosycat.sh --format md --only system,network > /dev/null || rc=$?
             [ "$rc" -le 2 ]
+            rc=0; bash ./nosycat.sh -q --no-color || rc=$?
+            echo "problems-only exit code: $rc"; [ "$rc" -le 2 ]
+            rc=0; bash ./nosycat.sh -q --format json > /src/report-q.json || rc=$?
+            [ "$rc" -le 2 ]
             bash ./nosycat.sh --snapshot --state-dir /tmp/nosy
             rc=0; bash ./nosycat.sh --diff --state-dir /tmp/nosy --no-color || rc=$?
             [ "$rc" -le 2 ]
@@ -59,4 +63,7 @@ jobs:
             [ "$rc" -eq 3 ]
           '
       - name: validate json report
-        run: jq -e '.summary and (.checks | length > 0)' report.json
+        run: |
+          jq -e '.schema_version == "1" and .summary and (.checks | length > 0)' report.json
+          jq -e '.problems_only and ([.checks[] | select(.status != "WARN" and .status != "FAIL")] | length == 0)' report-q.json
+          jq -e '[.checks[].id] | index("BKP-001") != null' report.json

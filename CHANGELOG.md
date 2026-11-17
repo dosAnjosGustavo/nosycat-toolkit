@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - Unreleased
+
+### added
+
+- **`-q` / `--problems-only`:** only WARN/FAIL checks, with their why and fix, plus the summary. A module header is printed only when the module has something to show, the banner shrinks to one line and the not-root note to a short one. `--format md` keeps only the WARN/FAIL rows (with a note); `--format json` keeps only WARN/FAIL in `checks[]` and sets `"problems_only": true`. Summary counts and the exit code always cover every check.
+- **Expiry for accepted findings:** `.nosycat.ignore` lines can end in `until YYYY-MM-DD` (`SEC-005: installer needs exec until 2027-01-31`, or `SEC-005 until 2027-01-31`). The entry applies through that day; afterwards the check shows its real status with `ignore expired DATE (reason)`, counts for the exit code, and the summary lists the expired ids. Permanent entries get a gentle tip in the summary to set a date. Invalid dates are a warning on stderr and the entry is skipped. JSON adds `ignore_until` (string or `null`) on IGNORED checks, `ignore_expired` on checks whose ignore ran out, and `summary.ignore_expired`.
+- **`backup` module (BKP-001..004):** detects restic, borg/borgmatic, rsnapshot, timeshift, duplicity, duplicati and kopia; finds their schedule in cron (`/etc/crontab`, `cron.d`, `cron.*`, the spool; commented lines ignored), enabled systemd timers and timeshift's own config; reads the age of the last backup from metadata that needs no password (restic cache or local repo `snapshots/`, borg `security/*/manifest-timestamp`, rsnapshot `<interval>.0`, timeshift snapshot names, duplicity cache); and warns when the only copies are on the root filesystem. `--backup-max-age DAYS` (default 7). No tool is a WARN that reminds you provider snapshots are invisible from inside the VM; an age it cannot read is a SKIP with the reason. Never runs a backup tool or reads a password, env file or keyring.
+- **JSON `schema_version`** (`"1"`), first field of the report, with a stability policy in [`docs/json.md`](docs/json.md): additive changes keep the version, removed/renamed fields, type changes and new `status` values bump it.
+- `SECURITY.md` (supported versions, private reporting through GitHub Security Advisories, what counts as a vulnerability) and a "false positive" issue form asking for the check id, distro and redacted `--format json --only <module>` output.
+- Fixture hooks `NOSY_FX_TODAY`, `NOSY_FX_NOW`, `NOSY_FS` and `NOSY_FX_BKP_TOOLS` for the new tests; CI also runs `-q` (text and JSON) in every container and checks `schema_version`.
+
+### changed
+
+- JSON reports now start with `schema_version` and include `problems_only` and `summary.ignore_expired` (additive; `schema_version` stays `"1"`).
+
 ## [0.1.1] - 2026-11-16
 
 ### fixed

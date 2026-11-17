@@ -34,6 +34,11 @@ md_esc() { local s="${1//|/\\|}"; printf '%s' "${s//$'\n'/ }"; }
 
 print_banner() {
   local art
+  if [ "$PROBLEMS_ONLY" -eq 1 ]; then
+    # lean mode: one line instead of the cat
+    printf '%s%s%s %s%s v%s%s %s%s host %s %s %s %s problems only%s\n' "$C_PINK" "$G_FLOWER" "$C_RST" "$C_LILAC$C_BOLD" "$NOSY_NAME" "$NOSY_VERSION" "$C_RST" "$C_DIM" "$G_DOT" "$HOST_NAME" "$G_DOT" "$(date '+%Y-%m-%d %H:%M %Z')" "$G_DOT" "$C_RST"
+    return 0
+  fi
   art="$(cat <<'BANNER'
            .---.
          _/_____\_     ________
@@ -50,6 +55,16 @@ BANNER
   use_utf8 || art="$(_asciify "$art")"
   printf '%s%s%s\n' "$C_PINK" "$art" "$C_RST"
   printf '%s  v%s %s host %s %s %s %s read-only%s\n' "$C_DIM" "$NOSY_VERSION" "$G_DOT" "$HOST_NAME" "$G_DOT" "$(date '+%Y-%m-%d %H:%M %Z')" "$G_DOT" "$C_RST"
+}
+
+# print_run_note -> the not-root note under the banner (one short line with -q).
+print_run_note() {
+  [ "$IS_ROOT" -eq 1 ] && return 0
+  if [ "$PROBLEMS_ONLY" -eq 1 ]; then
+    printf '  %snote: not root, some checks SKIP; sudo shows everything.%s\n' "$C_SKY" "$C_RST"
+  else
+    printf '  %snote: running as %s (not root), so some checks are SKIPped. use sudo for the full picture.%s\n' "$C_SKY" "$(id -un)" "$C_RST"
+  fi
 }
 
 # _asciify TEXT -> TEXT with the cute non-ASCII symbols replaced (for --ascii / non-UTF-8 locales).
@@ -274,6 +289,26 @@ _verdict() {
   return 0
 }
 
+# _ignore_notes -> expired ignores that no longer apply, and a gentle hint when
+# applied ignores have no expiry (accepted risks should come back for review).
+_ignore_notes() {
+  local i nperm=0
+  local -a exp=()
+  for i in "${!R_STATUS[@]}"; do
+    [ -n "${R_EXPIRED[$i]:-}" ] && exp+=("${R_ID[$i]}")
+    [ "${R_STATUS[$i]}" = "IGNORED" ] && [ -z "${R_UNTIL[$i]:-}" ] && nperm=$((nperm + 1))
+  done
+  if [ "${#exp[@]}" -gt 0 ]; then
+    local what="ignore expired"; [ "${#exp[@]}" -gt 1 ] && what="ignores expired"
+    printf '  %s%d %s: %s. renew the date or fix it.%s\n' "$C_WARN" "${#exp[@]}" "$what" "$(trunc_list 4 "${exp[@]}")" "$C_RST"
+  fi
+  if [ "$nperm" -gt 0 ]; then
+    local what="ignore without an expiry"; [ "$nperm" -gt 1 ] && what="ignores without an expiry"
+    printf '  %stip: %d %s; add "until YYYY-MM-DD" so accepted risks come back.%s\n' "$C_SKIP" "$nperm" "$what" "$C_RST"
+  fi
+  return 0
+}
+
 print_summary() {
   local o w f s ig
   o="$(count_status OK)"; w="$(count_status WARN)"; f="$(count_status FAIL)"; s="$(count_status SKIP)"; ig="$(count_status IGNORED)"
@@ -282,6 +317,7 @@ print_summary() {
   _by_module
   _fix_first
   _verdict "$f" "$w" "$s"
+  _ignore_notes
 }
 
 # render_text_full -> plain report (used for --output with text format)
@@ -290,6 +326,7 @@ render_text_full() {
   printf '%s %s report for %s (%s)\n' "$NOSY_NAME" "$NOSY_VERSION" "$HOST_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf 'os=%s virt=%s provider=%s pkg=%s firewall=%s root=%s\n' "$OS_NAME" "$VIRT" "$PROVIDER" "$PKG_MGR" "$FW_ACTIVE" "$IS_ROOT"
   for i in "${!R_ID[@]}"; do
+    shown_status "${R_STATUS[$i]}" || continue
     if [ "${R_MOD[$i]}" != "$last" ]; then printf '\n%s %s\n' "$G_FLOWER" "${R_MOD[$i]}"; last="${R_MOD[$i]}"; fi
     print_check_line "${R_STATUS[$i]}" "${R_ID[$i]}" "${R_TITLE[$i]}" "${R_DETAIL[$i]}" "${R_FIX[$i]}"
   done
@@ -303,7 +340,12 @@ render_md() {
   printf '| os | virtualization | provider | package manager | firewall | root |\n|---|---|---|---|---|---|\n'
   printf '| %s | %s | %s | %s | %s | %s |\n\n' "$(md_esc "$OS_NAME")" "$VIRT" "$PROVIDER" "$PKG_MGR" "$FW_ACTIVE" "$([ "$IS_ROOT" -eq 1 ] && echo yes || echo no)"
   printf '**summary:** %s OK · %s WARN · %s FAIL · %s SKIP%s\n' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(_ign_summary)"
+  # shellcheck disable=SC2016  # literal Markdown backticks
+  [ "$PROBLEMS_ONLY" -eq 1 ] && printf '\n_problems only (%s): OK, SKIP, IGNORED and INFO rows are left out; the summary counts everything._\n' '`-q`'
+  local notes; notes="$(colors_off; _ignore_notes)"
+  [ -n "$notes" ] && printf '\n%s\n' "$(printf '%s\n' "$notes" | sed 's/^  /> /')"
   for i in "${!R_ID[@]}"; do
+    shown_status "${R_STATUS[$i]}" || continue
     if [ "${R_MOD[$i]}" != "$last" ]; then
       printf '\n## %s\n\n| status | id | check | why | fix |\n|---|---|---|---|---|\n' "${R_MOD[$i]}"
       last="${R_MOD[$i]}"
@@ -314,15 +356,21 @@ render_md() {
 }
 
 render_json() {
-  local i sep=""
-  printf '{"tool":"%s","version":"%s","generated_at":"%s","host":"%s",' "$NOSY_NAME" "$NOSY_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$HOST_NAME")"
+  local i sep="" ign_exp=0
+  for i in "${!R_ID[@]}"; do [ -n "${R_EXPIRED[$i]:-}" ] && ign_exp=$((ign_exp + 1)); done
+  printf '{"schema_version":"%s","tool":"%s","version":"%s","generated_at":"%s","host":"%s","problems_only":%s,' "$NOSY_SCHEMA_VERSION" "$NOSY_NAME" "$NOSY_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$HOST_NAME")" "$([ "$PROBLEMS_ONLY" -eq 1 ] && echo true || echo false)"
   printf '"environment":{"os":"%s","os_id":"%s","family":"%s","kernel":"%s","virt":"%s","virt_kind":"%s","provider":"%s","pkg_manager":"%s","init":"%s","firewall":"%s","root":%s},' \
     "$(json_esc "$OS_NAME")" "$(json_esc "$OS_ID")" "$OS_FAMILY" "$(uname -r)" "$(json_esc "$VIRT")" "$VIRT_KIND" "$(json_esc "$PROVIDER")" "$PKG_MGR" "$(json_esc "$INIT_SYS")" "$FW_ACTIVE" "$([ "$IS_ROOT" -eq 1 ] && echo true || echo false)"
-  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d,"info":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)" "$(count_status INFO)"
+  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d,"info":%d,"ignore_expired":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)" "$(count_status INFO)" "$ign_exp"
   for i in "${!R_ID[@]}"; do
-    local extra=""
+    shown_status "${R_STATUS[$i]}" || continue
+    local extra="" u
     if [ "${R_STATUS[$i]}" = "IGNORED" ]; then
-      extra="$(printf ',"original_status":"%s","ignore_reason":"%s"' "${R_ORIG[$i]}" "$(json_esc "${R_NOTE[$i]}")")"
+      u="${R_UNTIL[$i]:-}"
+      extra="$(printf ',"original_status":"%s","ignore_reason":"%s","ignore_until":%s' "${R_ORIG[$i]}" "$(json_esc "${R_NOTE[$i]}")" "${u:+\"$u\"}")"
+      [ -n "$u" ] || extra+="null"
+    elif [ -n "${R_EXPIRED[$i]:-}" ]; then
+      extra="$(printf ',"ignore_expired":"%s","ignore_reason":"%s"' "${R_EXPIRED[$i]}" "$(json_esc "${R_NOTE[$i]}")")"
     fi
     printf '%s{"id":"%s","module":"%s","status":"%s","title":"%s","detail":"%s","fix":"%s"%s}' "$sep" \
       "${R_ID[$i]}" "${R_MOD[$i]}" "${R_STATUS[$i]}" "$(json_esc "${R_TITLE[$i]}")" "$(json_esc "${R_DETAIL[$i]}")" "$(json_esc "${R_FIX[$i]}")" "$extra"

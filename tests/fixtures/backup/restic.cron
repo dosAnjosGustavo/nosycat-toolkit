@@ -1,0 +1,3 @@
+# nightly restic backup (the password is in the env file, never read by nosycat)
+SHELL=/bin/sh
+30 3 * * * root RESTIC_PASSWORD=hunter2-do-not-print /usr/bin/restic -r /srv/restic-repo backup /etc /var/www --quiet
