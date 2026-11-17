@@ -44,10 +44,12 @@ NOSY_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || ech
 . "$NOSY_ROOT/modules/security.sh"
 # shellcheck source=modules/databases.sh
 . "$NOSY_ROOT/modules/databases.sh"
+# shellcheck source=modules/backup.sh
+. "$NOSY_ROOT/modules/backup.sh"
 # shellcheck source=modules/snapshot.sh
 . "$NOSY_ROOT/modules/snapshot.sh"
 
-ALL_MODULES=(environment cloud_init system access network updates docker services web_tls security databases)
+ALL_MODULES=(environment cloud_init system access network updates docker services web_tls security databases backup)
 
 usage() {
   cat <<USAGE
@@ -59,6 +61,9 @@ usage: sudo ./nosycat.sh [options]
   --skip m1,m2        skip these modules
   --format FMT        text (default) | md | json
   --output DIR        also write the report to DIR/nosycat-<host>-<time>.<ext>
+  -q, --problems-only only WARN/FAIL checks (with why and fix) plus the summary;
+                      md lists only those rows, json keeps only those in checks[]
+                      (summary counts stay complete either way)
   --color WHEN        auto (default) | always | never; auto colors only a
                       terminal and honours NO_COLOR and TERM=dumb
   --no-color          same as --color never
@@ -69,7 +74,9 @@ usage: sudo ./nosycat.sh [options]
   --state-dir DIR     baseline location (default: /var/lib/nosycat as root,
                       ~/.local/state/nosycat otherwise)
   --ignore FILE       accepted findings to report as IGNORED (repeatable);
-                      STATE_DIR/.nosycat.ignore is always read if present
+                      STATE_DIR/.nosycat.ignore is always read if present.
+                      lines: ID, ID: reason, optional "until YYYY-MM-DD"
+  --backup-max-age N  warn when the last backup is older than N days (default 7)
   --timeout SECS      per-command timeout (default: $NOSY_TIMEOUT)
   --list              list modules and exit
   -h, --help          show this help
@@ -83,6 +90,12 @@ USAGE
 }
 
 die_usage() { echo "nosycat: $*" >&2; echo "try: ./nosycat.sh --help" >&2; exit 3; }
+
+# set_backup_max_age DAYS -> validates and sets BACKUP_MAX_AGE (whole days, 1 or more).
+set_backup_max_age() {
+  if ! [[ "$1" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$1))" -lt 1 ]; then die_usage "--backup-max-age needs a number of days (1 or more)"; fi
+  BACKUP_MAX_AGE="$((10#$1))"
+}
 
 ONLY="" SKIP_LIST="" OUTDIR="" MODE="check" STATE_DIR="" IGNORE_FILES=()
 while [ $# -gt 0 ]; do
@@ -99,6 +112,9 @@ while [ $# -gt 0 ]; do
     --state-dir=*) STATE_DIR="${1#*=}"; shift ;;
     --ignore) [ -n "${2:-}" ] || die_usage "--ignore needs a file"; IGNORE_FILES+=("$2"); shift 2 ;;
     --ignore=*) IGNORE_FILES+=("${1#*=}"); shift ;;
+    -q|--problems-only) PROBLEMS_ONLY=1; shift ;;
+    --backup-max-age) set_backup_max_age "${2:-}"; shift 2 ;;
+    --backup-max-age=*) set_backup_max_age "${1#*=}"; shift ;;
     --timeout) [[ "${2:-}" =~ ^[0-9]+$ ]] || die_usage "--timeout needs seconds"; NOSY_TIMEOUT="$2"; shift 2 ;;
     --color) case "${2:-}" in auto|always|never) COLOR_MODE="$2" ;; *) die_usage "--color needs auto|always|never" ;; esac; shift 2 ;;
     --color=*) COLOR_MODE="${1#*=}"; case "$COLOR_MODE" in auto|always|never) ;; *) die_usage "--color needs auto|always|never" ;; esac; shift ;;
@@ -167,9 +183,9 @@ if [ "$MODE" = "diff" ]; then
   RUN=(snapshot)
 fi
 
-[ "$FORMAT" = "text" ] && print_banner
-if [ "$IS_ROOT" -ne 1 ] && [ "$FORMAT" = "text" ]; then
-  printf '  %snote: running as %s (not root), so some checks are SKIPped. use sudo for the full picture.%s\n' "$C_SKY" "$(id -un)" "$C_RST"
+if [ "$FORMAT" = "text" ]; then
+  print_banner
+  print_run_note
 fi
 
 for m in "${RUN[@]}"; do

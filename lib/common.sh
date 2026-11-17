@@ -5,7 +5,9 @@
 # shellcheck disable=SC2034  # globals are consumed by other sourced files
 
 NOSY_NAME="nosycat-toolkit"
-NOSY_VERSION="0.1.1"
+NOSY_VERSION="0.2.0"
+# JSON report format version (docs/json.md). Bumped only on breaking changes.
+NOSY_SCHEMA_VERSION="1"
 
 # Result store (parallel arrays, one entry per check).
 R_STATUS=()
@@ -15,17 +17,23 @@ R_TITLE=()
 R_DETAIL=()
 R_FIX=()
 R_ORIG=()   # original status of IGNORED checks (empty otherwise)
-R_NOTE=()   # ignore reason of IGNORED checks
+R_NOTE=()   # ignore reason of IGNORED checks (and of expired ignores)
+R_UNTIL=()  # expiry date of the ignore that applied (empty = permanent)
+R_EXPIRED=() # date of an expired ignore that no longer applies (status unchanged)
 
 # Accepted findings (.nosycat.ignore): glob patterns on check ids + reasons.
 IGNORE_PAT=()
 IGNORE_WHY=()
+IGNORE_UNTIL=()   # YYYY-MM-DD, last day the entry applies; empty = permanent
 
 CUR_MOD=""
 FORMAT="text"
 COLOR_MODE="auto"   # auto | always | never (--color / --no-color)
 ASCII_MODE="auto"   # auto | on (--ascii)
 LIVE_TEXT=1
+PROBLEMS_ONLY=0      # -q / --problems-only: only WARN/FAIL in the check stream and reports
+BACKUP_MAX_AGE=7     # --backup-max-age DAYS
+_PENDING_HEADER=""   # module header held back in problems-only mode
 NOSY_TIMEOUT="${NOSY_TIMEOUT:-10}"
 # Locale of the caller; nosycat.sh captures it before forcing LC_ALL=C.
 NOSY_LOCALE="${NOSY_LOCALE-}"
@@ -134,6 +142,9 @@ q() { t "$NOSY_TIMEOUT" "$@" 2>/dev/null; }
 #     SUID (list of SUID files)
 #   NOSY_FSTAB, NOSY_PROC_MOUNTS  alternative fstab and /proc/mounts
 #   NOSY_FX_TTY=1         treat stdout as a terminal (color auto-detection tests)
+#   NOSY_FX_TODAY=YYYY-MM-DD / NOSY_FX_NOW=EPOCH  pin the clock (ignore expiry, backup age)
+#   NOSY_FS=DIR           fake root for absolute paths read by the backup module
+#   NOSY_FX_BKP_TOOLS="restic borg ..."  installed backup tools instead of a PATH lookup
 ETC="${NOSY_ETC:-/etc}"
 
 # fx NAME CMD... -> print the NOSY_FX_NAME fixture if set, otherwise run CMD under q.
@@ -146,6 +157,32 @@ fx() {
 fx_set() { local v="NOSY_FX_$1"; [ -n "${!v:-}" ]; }
 # fx_have NAME CMD -> true when the fixture is set or CMD is installed.
 fx_have() { fx_set "$1" || have "$2"; }
+
+# nosy_today -> local date YYYY-MM-DD; nosy_now -> epoch seconds (both mockable).
+nosy_today() { if [ -n "${NOSY_FX_TODAY:-}" ]; then printf '%s\n' "$NOSY_FX_TODAY"; else date +%Y-%m-%d; fi; }
+nosy_now() { if [ -n "${NOSY_FX_NOW:-}" ]; then printf '%s\n' "$NOSY_FX_NOW"; else date +%s; fi; }
+
+# valid_ymd YYYY-MM-DD -> true for a real calendar date (pure Bash, no date(1) quirks).
+valid_ymd() {
+  [[ "$1" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]] || return 1
+  local y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]})) dim
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] && [ "$d" -ge 1 ] || return 1
+  case "$m" in
+    2) if { [ $((y % 4)) -eq 0 ] && [ $((y % 100)) -ne 0 ]; } || [ $((y % 400)) -eq 0 ]; then dim=29; else dim=28; fi ;;
+    4|6|9|11) dim=30 ;;
+    *) dim=31 ;;
+  esac
+  [ "$d" -le "$dim" ]
+}
+
+# ymd_epoch Y M D [h m s] -> epoch seconds of that UTC time (days-from-civil, no date(1)).
+ymd_epoch() {
+  local y=$((10#$1)) m=$((10#$2)) d=$((10#$3)) hh=$((10#${4:-0})) mm=$((10#${5:-0})) ss=$((10#${6:-0})) era yoe doy doe
+  [ "$m" -le 2 ] && y=$((y - 1))
+  era=$(( (y >= 0 ? y : y - 399) / 400 )); yoe=$((y - era * 400))
+  doy=$(( (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1 )); doe=$((yoe * 365 + yoe / 4 - yoe / 100 + doy))
+  echo $(( (era * 146097 + doe - 719468) * 86400 + hh * 3600 + mm * 60 + ss ))
+}
 
 # Temporary paths removed on exit, Ctrl-C or TERM (see the traps in nosycat.sh).
 NOSY_CLEANUP=()
@@ -165,12 +202,17 @@ nosy_mktemp_dir() {
   printf -v "$1" '%s' "$d"
 }
 
-# load_ignore_file FILE -> adds its entries to IGNORE_PAT/IGNORE_WHY.
-# Format, one per line:  ID  |  ID: reason  |  NET-*  (globs)  |  # comment
-# Returns 1 when FILE cannot be read; malformed lines are reported and skipped.
+# load_ignore_file FILE -> adds its entries to IGNORE_PAT/IGNORE_WHY/IGNORE_UNTIL.
+# Format, one per line:
+#   ID  |  ID: reason  |  NET-*  (globs)  |  # comment
+#   ... until YYYY-MM-DD   (optional, last day the entry applies; then it expires)
+# "until" counts as an expiry only when the word after it starts with a digit, so
+# a reason like "open until we move to the vpn" stays a reason.
+# Returns 1 when FILE cannot be read; malformed lines and invalid dates are
+# reported on stderr and skipped (the finding then shows normally).
 load_ignore_file() {
-  local file="$1" line pat why n=0
-  [ -r "$file" ] && [ -f "$file" ] || return 1
+  local file="$1" line pat why until n=0
+  [ -r "$file" ] && { [ -f "$file" ] || [ -p "$file" ]; } || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     line="${line%%[[:space:]]#*}"
@@ -184,20 +226,47 @@ load_ignore_file() {
       echo "nosycat: $file line $n: '$line' is not a check id (e.g. NET-001 or NET-*), skipped" >&2
       continue
     fi
-    IGNORE_PAT+=("$pat"); IGNORE_WHY+=("$why")
+    until=""
+    if [[ " $why" =~ ^(.*)[[:space:]]until[[:space:]]+([0-9][^[:space:]]*)$ ]]; then
+      until="${BASH_REMATCH[2]}"; why="${BASH_REMATCH[1]}"
+      why="${why#"${why%%[![:space:]]*}"}"; why="${why%"${why##*[![:space:]]}"}"
+      if ! valid_ymd "$until"; then
+        echo "nosycat: $file line $n: '$until' is not a valid date (use until YYYY-MM-DD), entry skipped" >&2
+        continue
+      fi
+    fi
+    IGNORE_PAT+=("$pat"); IGNORE_WHY+=("$why"); IGNORE_UNTIL+=("$until")
   done <"$file"
   return 0
 }
 
-# ignore_match ID -> prints the reason and returns 0 when ID is ignored.
-ignore_match() {
-  local i
+# ignore_lookup ID -> sets _IGN_HIT (active | expired | none), _IGN_WHY, _IGN_UNTIL.
+# An active entry wins over an expired one; the entry applies through its date.
+# Call it directly (not in $(...)) so the globals survive.
+_IGN_HIT="none" _IGN_WHY="" _IGN_UNTIL=""
+ignore_lookup() {
+  local i today="" u
+  _IGN_HIT="none" _IGN_WHY="" _IGN_UNTIL=""
   for i in "${!IGNORE_PAT[@]}"; do
     # shellcheck disable=SC2053  # the pattern is a deliberate glob
-    if [[ "$1" == ${IGNORE_PAT[$i]} ]]; then printf '%s' "${IGNORE_WHY[$i]}"; return 0; fi
+    [[ "$1" == ${IGNORE_PAT[$i]} ]] || continue
+    u="${IGNORE_UNTIL[$i]:-}"
+    if [ -n "$u" ]; then
+      [ -n "$today" ] || today="$(nosy_today)"
+      if [[ "$today" > "$u" ]]; then
+        [ "$_IGN_HIT" = "none" ] && { _IGN_HIT="expired"; _IGN_WHY="${IGNORE_WHY[$i]}"; _IGN_UNTIL="$u"; }
+        continue
+      fi
+    fi
+    _IGN_HIT="active"; _IGN_WHY="${IGNORE_WHY[$i]}"; _IGN_UNTIL="$u"
+    return 0
   done
+  [ "$_IGN_HIT" = "expired" ] && return 2
   return 1
 }
+
+# ignore_match ID -> prints the reason and returns 0 when ID is ignored (active entries only).
+ignore_match() { ignore_lookup "$1"; local rc=$?; [ "$rc" -eq 0 ] && printf '%s' "$_IGN_WHY"; [ "$rc" -eq 0 ]; }
 
 # record STATUS ID TITLE [DETAIL] [FIX]
 # WARN/FAIL results whose id is in the ignore list are stored as IGNORED.
@@ -210,21 +279,30 @@ _trim() {
 }
 
 record() {
-  local st="$1" id="$2" title="$3" detail="${4:-}" fix="${5:-}" orig="" note=""
+  local st="$1" id="$2" title="$3" detail="${4:-}" fix="${5:-}" orig="" note="" until="" expired=""
   title="$(_trim "$title")"; detail="$(_trim "$detail")"; fix="$(_trim "$fix")"
-  if { [ "$st" = "WARN" ] || [ "$st" = "FAIL" ]; } && [ "${#IGNORE_PAT[@]}" -gt 0 ] && note="$(ignore_match "$id")"; then
-    orig="$st"; st="IGNORED"
-    detail="ignored, was $orig${note:+: $note}${detail:+ · $detail}"
-  else
-    note=""
+  if { [ "$st" = "WARN" ] || [ "$st" = "FAIL" ]; } && [ "${#IGNORE_PAT[@]}" -gt 0 ]; then
+    ignore_lookup "$id"
+    case "$_IGN_HIT" in
+      active)
+        orig="$st"; st="IGNORED"; note="$_IGN_WHY"; until="$_IGN_UNTIL"
+        detail="ignored, was $orig${note:+: $note}${until:+ (until $until)}${detail:+ · $detail}" ;;
+      expired)
+        note="$_IGN_WHY"; expired="$_IGN_UNTIL"
+        detail="ignore expired $expired${note:+ ($note)}${detail:+ · $detail}" ;;
+    esac
   fi
   R_STATUS+=("$st"); R_ID+=("$id"); R_MOD+=("$CUR_MOD")
   R_TITLE+=("$title"); R_DETAIL+=("$detail"); R_FIX+=("$fix")
-  R_ORIG+=("$orig"); R_NOTE+=("$note")
-  if [ "$FORMAT" = "text" ] && [ "$LIVE_TEXT" -eq 1 ]; then
+  R_ORIG+=("$orig"); R_NOTE+=("$note"); R_UNTIL+=("$until"); R_EXPIRED+=("$expired")
+  if [ "$FORMAT" = "text" ] && [ "$LIVE_TEXT" -eq 1 ] && shown_status "$st"; then
+    if [ -n "$_PENDING_HEADER" ]; then _print_module_header "$_PENDING_HEADER"; _PENDING_HEADER=""; fi
     print_check_line "$st" "$id" "$title" "$detail" "$fix"
   fi
 }
+
+# shown_status STATUS -> true when this status is printed (everything, or only WARN/FAIL with -q).
+shown_status() { [ "$PROBLEMS_ONLY" -ne 1 ] || [ "$1" = "WARN" ] || [ "$1" = "FAIL" ]; }
 ok()   { record OK   "$@"; }
 warn() { record WARN "$@"; }
 fail() { record FAIL "$@"; }
@@ -241,9 +319,11 @@ print_check_line() {
   if [ -n "$fix" ] && [ "$st" != "OK" ] && [ "$st" != "IGNORED" ] && [ "$st" != "INFO" ]; then printf '                  %sfix:%s %s%s%s\n' "$col" "$C_RST" "$C_SKY" "$fix" "$C_RST"; fi
 }
 
+_print_module_header() { printf '\n%s%s%s %s%s%s\n' "$C_PINK" "$G_FLOWER" "$C_RST" "$C_LILAC$C_BOLD" "$1" "$C_RST"; }
+# module_header NAME -> printed now, or (with -q) only before the module's first WARN/FAIL.
 module_header() {
   if [ "$FORMAT" = "text" ] && [ "$LIVE_TEXT" -eq 1 ]; then
-    printf '\n%s%s%s %s%s%s\n' "$C_PINK" "$G_FLOWER" "$C_RST" "$C_LILAC$C_BOLD" "$1" "$C_RST"
+    if [ "$PROBLEMS_ONLY" -eq 1 ]; then _PENDING_HEADER="$1"; else _print_module_header "$1"; fi
   fi
 }
 
