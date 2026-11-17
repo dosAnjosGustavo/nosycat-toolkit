@@ -9,6 +9,8 @@ if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
   echo "nosycat: bash 4 or newer is required" >&2; exit 3
 fi
 set -o pipefail
+# Remember the caller's locale (for UTF-8 symbols), then parse everything bytewise.
+NOSY_LOCALE="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 export LC_ALL=C
 PATH="$PATH:/usr/sbin:/sbin"
 
@@ -57,7 +59,11 @@ usage: sudo ./nosycat.sh [options]
   --skip m1,m2        skip these modules
   --format FMT        text (default) | md | json
   --output DIR        also write the report to DIR/nosycat-<host>-<time>.<ext>
-  --no-color          disable ANSI colors (NO_COLOR is honoured too)
+  --color WHEN        auto (default) | always | never; auto colors only a
+                      terminal and honours NO_COLOR and TERM=dumb
+  --no-color          same as --color never
+  --ascii             plain ASCII symbols, box and bar (automatic when the
+                      locale is not UTF-8)
   --snapshot          save a baseline of this server and exit
   --diff              compare the server against the saved baseline
   --state-dir DIR     baseline location (default: /var/lib/nosycat as root,
@@ -94,7 +100,10 @@ while [ $# -gt 0 ]; do
     --ignore) [ -n "${2:-}" ] || die_usage "--ignore needs a file"; IGNORE_FILES+=("$2"); shift 2 ;;
     --ignore=*) IGNORE_FILES+=("${1#*=}"); shift ;;
     --timeout) [[ "${2:-}" =~ ^[0-9]+$ ]] || die_usage "--timeout needs seconds"; NOSY_TIMEOUT="$2"; shift 2 ;;
-    --no-color) USE_COLOR=0; shift ;;
+    --color) case "${2:-}" in auto|always|never) COLOR_MODE="$2" ;; *) die_usage "--color needs auto|always|never" ;; esac; shift 2 ;;
+    --color=*) COLOR_MODE="${1#*=}"; case "$COLOR_MODE" in auto|always|never) ;; *) die_usage "--color needs auto|always|never" ;; esac; shift ;;
+    --no-color) COLOR_MODE=never; shift ;;
+    --ascii) ASCII_MODE=on; shift ;;
     --snapshot) [ "$MODE" = "diff" ] && die_usage "--snapshot and --diff are exclusive"; MODE="snapshot"; shift ;;
     --diff) [ "$MODE" = "snapshot" ] && die_usage "--snapshot and --diff are exclusive"; MODE="diff"; shift ;;
     --list) printf '%s\n' "${ALL_MODULES[@]}" snapshot; exit 0 ;;
@@ -144,6 +153,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 setup_colors
+setup_glyphs
 detect_all
 
 if [ "$MODE" = "snapshot" ]; then
@@ -175,7 +185,7 @@ if [ -n "$OUTDIR" ]; then
   ext="txt"; [ "$FORMAT" = "md" ] && ext="md"; [ "$FORMAT" = "json" ] && ext="json"
   outfile="$OUTDIR/nosycat-${HOST_NAME%%.*}-$(date +%Y%m%d-%H%M%S).$ext"
   case "$FORMAT" in
-    text) ( C_OK="" C_WARN="" C_FAIL="" C_SKIP="" C_DIM="" C_BOLD="" C_PINK="" C_RST=""; render_text_full ) >"$outfile" ;;
+    text) ( colors_off; render_text_full ) >"$outfile" ;;
     md) render_md >"$outfile" ;;
     json) render_json >"$outfile" ;;
   esac

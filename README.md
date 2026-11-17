@@ -89,6 +89,8 @@ sudo ./nosycat.sh --format json > report.json       # machine-readable
 sudo ./nosycat.sh --format md --output ./reports    # markdown file in ./reports
 sudo ./nosycat.sh --snapshot                        # right after deploy
 sudo ./nosycat.sh --diff                            # later: what changed?
+sudo ./nosycat.sh --color always | less -R          # keep the colors in a pager
+sudo ./nosycat.sh --ascii                           # plain ASCII box and symbols
 ```
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
@@ -136,9 +138,35 @@ sudo ./nosycat.sh --diff                            # later: what changed?
   [OK]   DB-001   databases bound to loopback only: postgresql on 127.0.0.1:5432
 
 .·:*¨¨* ❀ *¨¨*:·.
-  summary: 42 OK · 8 WARN · 2 FAIL · 15 SKIP
-  fix the FAIL items first; they are the ones that usually bite right after deploy.
+
+ ╭─ summary ────────────────────────────────────── 29 checks ─╮
+ │ ✗ 2 FAIL   ! 6 WARN   ✓ 16 OK   · 5 SKIP                   │
+ │ ████▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░ │
+ ╰────────────────────────────────────────────────────────────╯
+
+by module
+  environment ! 1 warn              cloud_init  ! 1 warn
+  system      ! 1 warn              access      ✗ 1 fail
+  network     ! 1 warn              updates     ! 1 warn
+  docker      ✗ 1 fail ! 1 warn     services    ✓ ok
+  web_tls     ✓ ok                  security    ✓ ok
+  databases   ✓ ok
+
+fix first
+  ✗ SSH-002  SSH password authentication is enabled
+  ✗ DKR-005  ports published on all interfaces: grafana 3000>3000/tcp
+  ! ENV-006  running as deploy (not root)
+  ! CLD-004  sshd drop-in enables password auth: /etc/ssh/sshd_config.d/50-clo…
+  ! SYS-005  no swap configured (1963 MiB RAM)
+  ! NET-005  net.ipv4.ip_forward=1
+  ! UPD-001  14 pending updates (6 security)
+  ! DKR-007  json-file logs without size limit: grafana, app
+
+=x.x=  2 hard failure(s). fix the FAIL items first!
+4 check(s) skipped without root; run with sudo for the full picture.
 ```
+
+In a terminal the summary card is colored with a pastel palette: rose FAIL, peach WARN, mint OK, lavender SKIP, a lilac box and a rainbow ❀ divider; the bar is split by status. Colors turn off by themselves when the output is piped or saved with `--output`, when `NO_COLOR` is set, or with `TERM=dumb`; `--color always|never` overrides that. The box, bar and symbols fall back to plain ASCII when the locale is not UTF-8, or with `--ascii`.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -167,7 +195,7 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 
 | `--format` | use |
 |---|---|
-| `text` | colored terminal output, printed as checks run (default) |
+| `text` | colored terminal output, printed as checks run, ending in a summary card: counts and a status bar, status by module, the top FAIL/WARN items to fix first and a verdict (default) |
 | `md` | Markdown report with an environment table and one table per module |
 | `json` | `{tool, version, host, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` (plus `original_status` and `ignore_reason` when ignored) |
 

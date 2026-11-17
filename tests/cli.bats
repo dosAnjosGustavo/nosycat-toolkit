@@ -73,6 +73,7 @@ load helpers
 
 @test "script banner is the README art (cat with \$ sniff)" {
   load_nosycat
+  NOSY_LOCALE=C.UTF-8; setup_glyphs
   local readme banner
   readme="$(awk '/^<pre>$/{f=1;next} /^<\/pre>$/{f=0} f' "$NOSY_SRC/README.md" | sed 's/[[:space:]]*$//')"
   banner="$(C_PINK='' C_RST='' C_DIM='' print_banner | sed '/^  v[0-9]/d; s/[[:space:]]*$//')"
