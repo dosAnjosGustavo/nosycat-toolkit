@@ -7,6 +7,7 @@ OS_ID="unknown" OS_LIKE="" OS_NAME="unknown" OS_FAMILY="unknown"
 VIRT="unknown" VIRT_KIND="unknown" PROVIDER="unknown" PROVIDER_SRC=""
 PKG_MGR="none" INIT_SYS="unknown"
 FW_ACTIVE="none"   # ufw | firewalld | nftables | iptables | none | unknown
+FW_BANNERS=""      # IP ban tools seen in the rules: fail2ban, crowdsec (not firewalls)
 HOST_NAME="$(hostname 2>/dev/null || cat /proc/sys/kernel/hostname 2>/dev/null || echo unknown)"
 
 _read1() { [ -r "$1" ] && head -n1 "$1" 2>/dev/null | tr -d '\0'; }
@@ -99,7 +100,13 @@ detect_provider() {
 # hooked on input actually filters: policy drop, or a drop/reject rule in that
 # chain or in a chain it jumps/goes to (same table). Drops elsewhere (e.g.
 # Docker's DOCKER-ISOLATION-* chains, reached from FORWARD) do not count, and
-# neither does a lone "ct state invalid drop".
+# neither do:
+#   - a lone "ct state invalid drop";
+#   - ban lists: rules that only drop/reject listed source addresses
+#     ("ip saddr @set", "ip6 saddr { ... }", "ip saddr 192.0.2.1"). An
+#     allowlist ("saddr != @trusted drop") still counts;
+#   - the tables fail2ban and CrowdSec create (f2b-*, crowdsec*), whatever
+#     they contain.
 nft_input_filters() {
   awk '
     function filters(c, depth,   i, n, parts) {
@@ -109,7 +116,8 @@ nft_input_filters() {
       for (i = 1; i <= n; i++) if (parts[i] != "" && filters(parts[i], depth + 1)) return 1
       return 0
     }
-    /^[[:space:]]*table[[:space:]]/ { tbl = $2 ":" $3; next }
+    /^[[:space:]]*table[[:space:]]/ { tbl = $2 ":" $3; banner = ($3 ~ /^(f2b-|crowdsec)/); ch = ""; next }
+    banner { next }
     /^[[:space:]]*chain[[:space:]]/ { ch = tbl "/" $2; next }
     ch == "" { next }
     /^[[:space:]]*}/ { ch = ""; next }
@@ -123,6 +131,7 @@ nft_input_filters() {
     }
     /(^|[[:space:]])(drop|reject)([[:space:]]|$)/ {
       if ($0 ~ /ct state invalid/) next
+      if ($0 ~ /(^|[[:space:]])saddr[[:space:]]/ && $0 !~ /(^|[[:space:]])saddr[[:space:]]+!=/) next
       dropper[ch] = 1
     }
     END {
@@ -131,22 +140,54 @@ nft_input_filters() {
     }'
 }
 
-# iptables_input_filters -> reads `iptables -S INPUT`; exits 0 on a DROP/REJECT
-# policy or rule, ignoring a lone "--ctstate INVALID -j DROP".
+# iptables_input_filters -> reads `iptables -S INPUT` (or ip6tables); exits 0 on
+# a DROP/REJECT policy or rule. Ignored: a lone "--ctstate INVALID -j DROP" and
+# ban lists, i.e. rules restricted to listed sources ("-s ADDR",
+# "-m set --match-set NAME src", as fail2ban and CrowdSec add). A negated
+# source ("! -s NET -j DROP") is an allowlist and counts.
 iptables_input_filters() {
-  grep -vE -- '--ctstate INVALID|--state INVALID' | grep -qE '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'
+  awk '
+    /^-P INPUT (DROP|REJECT)/ { f = 1 }
+    /^-A INPUT / && / -j (DROP|REJECT)( |$)/ {
+      if ($0 ~ /--(ct)?state INVALID /) next
+      neg = ($0 ~ / ! -s / || $0 ~ / ! --match-set /)
+      src = ($0 ~ / -s [^ ]+/ || $0 ~ / --match-set [^ ]+ src/)
+      if (src && !neg) next
+      f = 1
+    }
+    END { exit !f }'
 }
 
-# detect_firewall -> sets FW_ACTIVE to the first frontend that filters INPUT.
+# fw_banners -> reads nft and/or iptables rules on stdin; prints which IP ban
+# tools left rules there ("fail2ban", "crowdsec", "fail2ban crowdsec" or "").
+fw_banners() {
+  awk '
+    /^[[:space:]]*table[[:space:]]+[a-z0-9]+[[:space:]]+f2b-/ || / -j f2b-/ || /--match-set f2b-/ { f2b = 1 }
+    /^[[:space:]]*table[[:space:]]+[a-z0-9]+[[:space:]]+crowdsec/ || /--match-set crowdsec/ || / -j CROWDSEC/ { cs = 1 }
+    END {
+      out = ""
+      if (f2b) out = "fail2ban"
+      if (cs) out = out (out == "" ? "" : " ") "crowdsec"
+      print out
+    }'
+}
+
+# detect_firewall -> sets FW_ACTIVE to the first frontend that filters INPUT,
+# and FW_BANNERS to the IP ban tools seen in the rules (they are not firewalls).
 detect_firewall() {
+  FW_BANNERS=""
   if [ "$IS_ROOT" -ne 1 ]; then
     if unit_active firewalld; then FW_ACTIVE="firewalld"; else FW_ACTIVE="unknown"; fi
     return
   fi
   if fx_have UFW_STATUS ufw && fx UFW_STATUS ufw status | grep -q '^Status: active'; then FW_ACTIVE="ufw"; return; fi
   if fx_have FIREWALLD_STATE firewall-cmd && [ "$(fx FIREWALLD_STATE firewall-cmd --state)" = "running" ]; then FW_ACTIVE="firewalld"; return; fi
-  if fx_have NFT nft && fx NFT nft list ruleset | nft_input_filters; then FW_ACTIVE="nftables"; return; fi
-  if fx_have IPTABLES_INPUT iptables && fx IPTABLES_INPUT iptables -S INPUT | iptables_input_filters; then FW_ACTIVE="iptables"; return; fi
+  local nft_rs="" ipt_rs=""
+  if fx_have NFT nft; then nft_rs="$(fx NFT nft list ruleset)"; fi
+  if fx_have IPTABLES_INPUT iptables; then ipt_rs="$(fx IPTABLES_INPUT iptables -S INPUT)"; fi
+  FW_BANNERS="$(printf '%s\n%s\n' "$nft_rs" "$ipt_rs" | fw_banners)"
+  if [ -n "$nft_rs" ] && printf '%s\n' "$nft_rs" | nft_input_filters; then FW_ACTIVE="nftables"; return; fi
+  if [ -n "$ipt_rs" ] && printf '%s\n' "$ipt_rs" | iptables_input_filters; then FW_ACTIVE="iptables"; return; fi
   FW_ACTIVE="none"
 }
 

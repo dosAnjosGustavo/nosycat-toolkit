@@ -56,16 +56,20 @@ mod_network() {
   fi
 
   # NET-002 host firewall
+  local ban_note=""
+  if [ -n "${FW_BANNERS:-}" ]; then
+    case "$FW_BANNERS" in *" "*) ban_note="${FW_BANNERS// / and } only ban listed IPs; they are not a firewall" ;; *) ban_note="$FW_BANNERS only bans listed IPs; it is not a firewall" ;; esac
+  fi
   case "$FW_ACTIVE" in
-    ufw|firewalld|nftables|iptables) ok NET-002 "host firewall active: $FW_ACTIVE" "" ;;
+    ufw|firewalld|nftables|iptables) ok NET-002 "host firewall active: $FW_ACTIVE" "${FW_BANNERS:+also seen: ${FW_BANNERS// / and } (IP bans on top of the firewall)}" ;;
     unknown) skip NET-002 "host firewall" "needs root to read firewall rules" ;;
     *)
       if [ "$VIRT_KIND" = "container" ]; then
         skip NET-002 "host firewall" "inside a container; the host controls filtering"
       elif [ "${#exposed[@]}" -gt 0 ]; then
-        fail NET-002 "no active host firewall" "${#exposed[@]} service(s) are exposed with no host filtering; provider firewalls are not visible from here" "sudo ufw allow OpenSSH && sudo ufw enable   # or firewalld / nftables"
+        fail NET-002 "no active host firewall" "${#exposed[@]} service(s) are exposed with no host filtering; provider firewalls are not visible from here${ban_note:+; $ban_note}" "sudo ufw allow OpenSSH && sudo ufw enable   # or firewalld / nftables"
       else
-        warn NET-002 "no active host firewall" "nothing extra is exposed today, but the next service you install will be" "sudo ufw allow OpenSSH && sudo ufw enable   # or firewalld / nftables"
+        warn NET-002 "no active host firewall" "nothing extra is exposed today, but the next service you install will be${ban_note:+; $ban_note}" "sudo ufw allow OpenSSH && sudo ufw enable   # or firewalld / nftables"
       fi ;;
   esac
 

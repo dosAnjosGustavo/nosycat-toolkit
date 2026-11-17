@@ -6,7 +6,7 @@ mod_services() {
   if ! systemd_up; then
     if have rc-status; then
       local crashed
-      crashed="$(q rc-status --crashed | tr '\n' ' ')"
+      crashed="$(q rc-status --crashed | paste -sd ' ' -)"
       if [ -n "${crashed// /}" ]; then warn SVC-001 "crashed OpenRC services: $crashed" "they are not running and will not be retried" "rc-service NAME restart; check /var/log/messages"
       else ok SVC-001 "no crashed OpenRC services" ""; fi
     else
@@ -17,7 +17,7 @@ mod_services() {
     skip SVC-004 "journal size limit" "systemd only"
   else
     local failed
-    failed="$(q systemctl list-units --state=failed --no-legend --plain | awk '{print $1}' | tr '\n' ' ')"
+    failed="$(q systemctl list-units --state=failed --no-legend --plain | awk '{print $1}' | paste -sd ' ' -)"
     if [ -n "${failed// /}" ]; then
       warn SVC-001 "failed units: $failed" "a failed unit at deploy time usually means a broken config or missing dependency" "systemctl status UNIT; journalctl -u UNIT -b"
     else

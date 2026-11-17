@@ -1,0 +1,4 @@
+-P INPUT ACCEPT
+-A INPUT -p tcp -m multiport --dports 22 -j f2b-sshd
+-A INPUT -p tcp -m multiport --dports 22 -m set --match-set f2b-sshd src -j REJECT --reject-with icmp-port-unreachable
+-A INPUT -s 192.0.2.10/32 -j REJECT --reject-with icmp-port-unreachable

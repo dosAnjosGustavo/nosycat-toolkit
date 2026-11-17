@@ -36,6 +36,7 @@ mod_environment() {
   if [ "$IS_ROOT" -eq 1 ]; then
     ok ENV-006 "running as root" "full visibility"
   else
-    warn ENV-006 "running as $(id -un) (not root)" "reduced visibility: firewall rules, shadow, sshd -T, other users' files and process names are hidden; affected checks are marked SKIP" "sudo ./nosycat.sh"
+    # A note about this run, not a server problem: INFO never affects the exit code or "fix first".
+    record INFO ENV-006 "running as $(id -un) (not root)" "reduced visibility: firewall rules, shadow, sshd -T, other users' files and process names are hidden; affected checks are marked SKIP. run with sudo for the full picture"
   fi
 }

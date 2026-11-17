@@ -1,7 +1,8 @@
 name: release
 
-# Runs only when a v* tag is pushed. Publishes nosycat-toolkit-X.Y.Z.tar.gz and
-# its .sha256 to a GitHub release, after the same lint and tests as ci.yml.
+# Runs only when a v* tag is pushed. Publishes nosycat-toolkit-X.Y.Z.tar.gz, the
+# single-file nosycat.sh (scripts/bundle.sh) and a .sha256 for each to a GitHub
+# release, after the same lint and tests as ci.yml.
 
 on:
   push:
@@ -32,7 +33,7 @@ jobs:
 
       - name: shellcheck + bats
         run: |
-          shellcheck -x nosycat.sh lib/*.sh modules/*.sh tests/helpers.bash tests/stubs/*
+          shellcheck -x nosycat.sh lib/*.sh modules/*.sh scripts/*.sh tests/helpers.bash tests/stubs/*
           .bats/bin/bats tests/
 
       - name: build tarball and checksum
@@ -42,9 +43,20 @@ jobs:
           git archive --format=tar.gz --prefix="$name/" -o "$name.tar.gz" "$GITHUB_REF_NAME"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           cat "$name.tar.gz.sha256"
+
+      - name: build single-file nosycat.sh and checksum
+        run: |
+          scripts/bundle.sh nosycat-bundle/nosycat.sh
+          ./nosycat-bundle/nosycat.sh --version | grep -qx "nosycat-toolkit ${GITHUB_REF_NAME#v}"
+          (cd nosycat-bundle && sha256sum nosycat.sh > nosycat.sh.sha256 && cat nosycat.sh.sha256)
+
+      - name: release notes
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          name="nosycat-toolkit-$ver"
           awk -v v="$ver" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
           # shellcheck disable=SC2016  # literal Markdown code fence
-          printf '\n**sha256**\n\n```\n%s\n```\n' "$(cat "$name.tar.gz.sha256")" >> notes.md
+          printf '\n**sha256**\n\n```\n%s\n%s\n```\n' "$(cat "$name.tar.gz.sha256")" "$(cat nosycat-bundle/nosycat.sh.sha256)" >> notes.md
 
       - name: publish release
         env:
@@ -52,4 +64,5 @@ jobs:
         run: |
           ver="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "nosycat-toolkit $ver" --notes-file notes.md \
-            "nosycat-toolkit-$ver.tar.gz" "nosycat-toolkit-$ver.tar.gz.sha256"
+            "nosycat-toolkit-$ver.tar.gz" "nosycat-toolkit-$ver.tar.gz.sha256" \
+            nosycat-bundle/nosycat.sh nosycat-bundle/nosycat.sh.sha256

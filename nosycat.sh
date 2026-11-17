@@ -169,7 +169,7 @@ fi
 
 [ "$FORMAT" = "text" ] && print_banner
 if [ "$IS_ROOT" -ne 1 ] && [ "$FORMAT" = "text" ]; then
-  printf '  %snote: not running as root, so some checks are SKIPped. use sudo for the full picture.%s\n' "$C_WARN" "$C_RST"
+  printf '  %snote: running as %s (not root), so some checks are SKIPped. use sudo for the full picture.%s\n' "$C_SKY" "$(id -un)" "$C_RST"
 fi
 
 for m in "${RUN[@]}"; do

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake systemctl: failed units come from $SYSTEMCTL_STUB_FAILED, everything else is empty.
+case "$*" in
+  *--state=failed*) [ -n "${SYSTEMCTL_STUB_FAILED:-}" ] && printf '%s\n' "$SYSTEMCTL_STUB_FAILED" ;;
+  is-active*|is-enabled*) exit 3 ;;
+esac
+exit 0

@@ -31,7 +31,7 @@
 
 You just deployed a VPS. It boots, SSH works, the app is up. Then, weeks later, a disk fills with container logs, a Redis instance ends up on a scanner list, a detached volume stops the server at boot, or Docker quietly publishes a port that ufw was supposed to block.
 
-`nosycat.sh` is a single Bash script that runs right after deploy and flags those problems while they are still cheap to fix. Each check returns `OK`, `WARN`, `FAIL` or `SKIP`, a one-line reason, and a suggested fix command. It works on Debian/Ubuntu, RHEL/Rocky/Alma, Alpine and Arch, on any provider (Hetzner, Contabo, DigitalOcean, AWS, OVH, Vultr…), and needs nothing beyond Bash 4 and standard userland tools.
+`nosycat.sh` is a single Bash script that runs right after deploy and flags those problems while they are still cheap to fix. Each check returns `OK`, `WARN`, `FAIL` or `SKIP`, a one-line reason, and a suggested fix command (`INFO` is a note about the run itself, like running without root, and never changes the exit code). It works on Debian/Ubuntu, RHEL/Rocky/Alma, Alpine and Arch, on any provider (Hetzner, Contabo, DigitalOcean, AWS, OVH, Vultr…), and needs nothing beyond Bash 4 and standard userland tools.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -80,6 +80,20 @@ tar xzf "nosycat-toolkit-$VER.tar.gz" && cd "nosycat-toolkit-$VER"
 sudo ./nosycat.sh
 ```
 
+Prefer a single file you can `scp` to the server? Each release also ships `nosycat.sh` with `lib/` and `modules/` inlined (built by `scripts/bundle.sh`, tested in CI to give the same output as the tree):
+
+```bash
+# on your machine
+VER=0.1.1
+BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
+curl -fsSLO "$BASE/nosycat.sh" && curl -fsSLO "$BASE/nosycat.sh.sha256"
+sha256sum -c nosycat.sh.sha256                        # must print: nosycat.sh: OK
+scp nosycat.sh nosycat.sh.sha256 deploy@192.0.2.10:
+
+# on the server
+sha256sum -c nosycat.sh.sha256 && chmod +x nosycat.sh && sudo ./nosycat.sh
+```
+
 The checksum guards against a corrupted or swapped download; compare it with the one on the [release page](https://github.com/trizdev/nosycat-toolkit/releases) too. Hacking on it instead? `git clone` the repo and run `./nosycat.sh` from your checkout.
 
 ```bash
@@ -101,12 +115,15 @@ sudo ./nosycat.sh --ascii                           # plain ASCII box and symbol
 
 ```
   v0.1.1 · host web-01.example.com · 2026-11-16 18:02 UTC · read-only
+  note: running as deploy (not root), so some checks are SKIPped. use sudo for the full picture.
 
 ❀ environment
   [OK]   ENV-001  distribution: Ubuntu 24.04.1 LTS
   [OK]   ENV-002  virtualization: kvm (vm)
   [OK]   ENV-003  provider: hetzner
                   why: from dmi/hostname; remember provider-level firewalls/security groups are not visible from inside the VM
+  [INFO] ENV-006  running as deploy (not root)
+                  why: reduced visibility: firewall rules, shadow, sshd -T, other users' files and process names are hidden; affected checks are marked SKIP. run with sudo for the full picture
 
 ❀ cloud_init
   [OK]   CLD-002  cloud-init finished: done
@@ -139,31 +156,30 @@ sudo ./nosycat.sh --ascii                           # plain ASCII box and symbol
 
 .·:*¨¨* ❀ *¨¨*:·.
 
- ╭─ summary ────────────────────────────────────── 29 checks ─╮
- │ ✗ 2 FAIL   ! 6 WARN   ✓ 16 OK   · 5 SKIP                   │
- │ ████▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░ │
- ╰────────────────────────────────────────────────────────────╯
+  ╭─ summary ────────────────────────────────────── 28 checks ─╮
+  │ ✗ 2 FAIL   ! 5 WARN   ✓ 16 OK   · 5 SKIP                   │
+  │ ████▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░ │
+  ╰────────────────────────────────────────────────────────────╯
 
-by module
-  environment ! 1 warn              cloud_init  ! 1 warn
+❀ by module
+  environment ✓ ok                  cloud_init  ! 1 warn
   system      ! 1 warn              access      ✗ 1 fail
   network     ! 1 warn              updates     ! 1 warn
   docker      ✗ 1 fail ! 1 warn     services    ✓ ok
   web_tls     ✓ ok                  security    ✓ ok
   databases   ✓ ok
 
-fix first
+❀ fix first
   ✗ SSH-002  SSH password authentication is enabled
   ✗ DKR-005  ports published on all interfaces: grafana 3000>3000/tcp
-  ! ENV-006  running as deploy (not root)
   ! CLD-004  sshd drop-in enables password auth: /etc/ssh/sshd_config.d/50-clo…
   ! SYS-005  no swap configured (1963 MiB RAM)
   ! NET-005  net.ipv4.ip_forward=1
   ! UPD-001  14 pending updates (6 security)
   ! DKR-007  json-file logs without size limit: grafana, app
 
-=x.x=  2 hard failure(s). fix the FAIL items first!
-4 check(s) skipped without root; run with sudo for the full picture.
+  =x.x=  2 hard failure(s). fix the FAIL items first!
+  4 of 5 skipped checks need root; run with sudo for the full picture.
 ```
 
 In a terminal the summary card is colored with a pastel palette: rose FAIL, peach WARN, mint OK, lavender SKIP, a lilac box and a rainbow ❀ divider; the bar is split by status. Colors turn off by themselves when the output is piped or saved with `--output`, when `NO_COLOR` is set, or with `TERM=dumb`; `--color always|never` overrides that. The box, bar and symbols fall back to plain ASCII when the locale is not UTF-8, or with `--ascii`.
@@ -201,7 +217,7 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 
 | exit code | meaning |
 |---|---|
-| `0` | everything OK (SKIPs and IGNOREDs do not count) |
+| `0` | everything OK (SKIPs, IGNOREDs and INFO notes do not count) |
 | `1` | at least one WARN |
 | `2` | at least one FAIL |
 | `3` | usage error or missing baseline |

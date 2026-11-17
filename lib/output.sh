@@ -8,7 +8,7 @@ count_status() {
   echo "$n"
 }
 
-# final_exit_code -> 2 on any FAIL, 1 on any WARN, else 0 (IGNORED/SKIP do not count).
+# final_exit_code -> 2 on any FAIL, 1 on any WARN, else 0 (IGNORED/SKIP/INFO do not count).
 final_exit_code() {
   if [ "$(count_status FAIL)" -gt 0 ]; then echo 2
   elif [ "$(count_status WARN)" -gt 0 ]; then echo 1
@@ -16,7 +16,12 @@ final_exit_code() {
 }
 
 # _ign_summary -> " · N IGNORED" when something was ignored.
-_ign_summary() { local n; n="$(count_status IGNORED)"; [ "$n" -gt 0 ] && printf ' · %d IGNORED' "$n"; }
+_ign_summary() {
+  local n
+  n="$(count_status IGNORED)"; [ "$n" -gt 0 ] && printf ' · %d IGNORED' "$n"
+  n="$(count_status INFO)"; [ "$n" -gt 0 ] && printf ' · %d INFO' "$n"
+  return 0
+}
 
 json_esc() {
   local s="$1"
@@ -59,8 +64,10 @@ _asciify() {
 # per-module status in two columns, the top FAIL/WARN items and a verdict.
 # Everything is laid out by display width (not bytes) so the box stays
 # aligned under LC_ALL=C, and fits 80 columns.
+# Indentation follows the per-check stream: headings ("❀ module", the divider,
+# "❀ by module", "❀ fix first") at column 0, everything else at column 2.
 
-SUM_W=58          # inner width of the summary box; the box is SUM_W+5 columns
+SUM_W=58          # inner width of the summary box; the box is SUM_W+4 columns (+2 indent)
 FIX_FIRST_MAX=8   # how many FAIL/WARN items the "fix first" list shows
 
 # _ulen TEXT -> display width of plain TEXT (UTF-8 aware, bytewise-safe).
@@ -119,7 +126,7 @@ _ln_add() { _LN+="$2$1${2:+$C_RST}"; _LN_PLAIN+="$1"; }   # _ln_add TEXT [COLOR]
 _ln_pad() { local w; w="$(_ulen "$_LN_PLAIN")"; [ "$w" -lt "$1" ] && _ln_add "$(_rep ' ' $(($1 - w)))"; return 0; }
 
 # _box_row -> print _LN padded to SUM_W inside the box borders.
-_box_row() { _ln_pad "$SUM_W"; printf ' %s%s%s %s %s%s%s\n' "$C_LILAC" "$G_V" "$C_RST" "$_LN" "$C_LILAC" "$G_V" "$C_RST"; }
+_box_row() { _ln_pad "$SUM_W"; printf '  %s%s%s %s %s%s%s\n' "$C_LILAC" "$G_V" "$C_RST" "$_LN" "$C_LILAC" "$G_V" "$C_RST"; }
 
 # bar_widths WIDTH C1 C2 ... -> one width per count, summing to WIDTH; any non-zero
 # count gets at least one cell, the rest is split by largest remainder.
@@ -152,7 +159,7 @@ _summary_box() {
   total=$((f + w + o + s + ig))
   head="$G_H summary "; tail=" $total checks $G_H"
   fill=$((SUM_W + 2 - $(_ulen "$head") - $(_ulen "$tail")))
-  printf ' %s%s%s%s%s%s%s%s%s%s\n' "$C_LILAC" "$G_TL$G_H " "$C_PINK$C_BOLD" "summary" "$C_RST$C_LILAC" " $(_rep "$G_H" "$fill")" "$C_RST$C_DIM" " $total checks" "$C_RST$C_LILAC" " $G_H$G_TR$C_RST"
+  printf '  %s%s%s%s%s%s%s%s%s%s\n' "$C_LILAC" "$G_TL$G_H " "$C_PINK$C_BOLD" "summary" "$C_RST$C_LILAC" " $(_rep "$G_H" "$fill")" "$C_RST$C_DIM" " $total checks" "$C_RST$C_LILAC" " $G_H$G_TR$C_RST"
 
   _ln_reset
   _ln_add "$G_FAIL $f FAIL" "$C_FAIL$C_BOLD"; _ln_add "   "
@@ -174,7 +181,7 @@ _summary_box() {
   done
   _box_row
 
-  printf ' %s%s%s%s%s\n' "$C_LILAC" "$G_BL" "$(_rep "$G_H" $((SUM_W + 2)))" "$G_BR" "$C_RST"
+  printf '  %s%s%s%s%s\n' "$C_LILAC" "$G_BL" "$(_rep "$G_H" $((SUM_W + 2)))" "$G_BR" "$C_RST"
 }
 
 # _module_cell MODULE -> sets _LN to the colored status of MODULE (worst first).
@@ -182,6 +189,7 @@ _module_cell() {
   local m="$1" i nf=0 nw=0 no=0 ns=0 ni=0
   for i in "${!R_MOD[@]}"; do
     [ "${R_MOD[$i]}" = "$m" ] || continue
+    [ "${R_STATUS[$i]}" = "INFO" ] && continue
     case "${R_STATUS[$i]}" in FAIL) nf=$((nf + 1)) ;; WARN) nw=$((nw + 1)) ;; OK) no=$((no + 1)) ;; IGNORED) ni=$((ni + 1)) ;; *) ns=$((ns + 1)) ;; esac
   done
   _ln_reset
@@ -190,9 +198,13 @@ _module_cell() {
   if [ $((nf + nw)) -eq 0 ]; then
     if [ "$no" -gt 0 ]; then _ln_add "$G_OK ok" "$C_OK"
     elif [ "$ns" -gt 0 ]; then _ln_add "$G_SKIP skipped" "$C_SKIP"
-    else _ln_add "$G_IGN ignored" "$C_IGN"; fi
+    elif [ "$ni" -gt 0 ]; then _ln_add "$G_IGN ignored" "$C_IGN"
+    else _ln_add "$G_OK ok" "$C_OK"; fi   # only INFO notes
   fi
 }
+
+# _heading TEXT -> a section heading styled like the per-module headers.
+_heading() { printf '\n%s%s%s %s%s%s\n' "$C_PINK" "$G_FLOWER" "$C_RST" "$C_LILAC$C_BOLD" "$1" "$C_RST"; }
 
 _by_module() {
   local -a mods=()
@@ -203,7 +215,7 @@ _by_module() {
     last="$m"; mods+=("$m")
   done
   [ "${#mods[@]}" -gt 0 ] || return 0
-  printf '\n%sby module%s\n' "$C_LILAC$C_BOLD" "$C_RST"
+  _heading "by module"
   for m in "${mods[@]}"; do
     _module_cell "$m"
     if [ "$col" -eq 0 ]; then
@@ -224,7 +236,7 @@ _fix_first() {
     for i in "${!R_STATUS[@]}"; do [ "${R_STATUS[$i]}" = "$st" ] && idx+=("$i"); done
   done
   [ "${#idx[@]}" -gt 0 ] || return 0
-  printf '\n%sfix first%s\n' "$C_LILAC$C_BOLD" "$C_RST"
+  _heading "fix first"
   for i in "${idx[@]}"; do
     [ "$shown" -ge "$FIX_FIRST_MAX" ] && break
     st="${R_STATUS[$i]}"
@@ -240,17 +252,24 @@ _verdict() {
   local f="$1" w="$2" s="$3" i nroot=0
   printf '\n'
   if [ "$f" -gt 0 ]; then
-    printf '%s=x.x=%s  %s%d hard failure(s). fix the FAIL items first!%s\n' "$C_FAIL$C_BOLD" "$C_RST" "$C_FAIL" "$f" "$C_RST"
+    printf '  %s=x.x=%s  %s%d hard failure(s). fix the FAIL items first!%s\n' "$C_FAIL$C_BOLD" "$C_RST" "$C_FAIL" "$f" "$C_RST"
   elif [ "$w" -gt 0 ]; then
-    printf '%s=o.o=%s  %sno hard failures. review the WARN items when you can.%s\n' "$C_WARN$C_BOLD" "$C_RST" "$C_WARN" "$C_RST"
+    printf '  %s=o.o=%s  %sno hard failures. review the WARN items when you can.%s\n' "$C_WARN$C_BOLD" "$C_RST" "$C_WARN" "$C_RST"
   else
-    printf '%s=^.^=%s  %sall clear! this server looks cozy.%s\n' "$C_OK$C_BOLD" "$C_RST" "$C_OK" "$C_RST"
+    printf '  %s=^.^=%s  %sall clear! this server looks cozy.%s\n' "$C_OK$C_BOLD" "$C_RST" "$C_OK" "$C_RST"
   fi
   if [ "$IS_ROOT" -ne 1 ] && [ "$s" -gt 0 ]; then
     for i in "${!R_STATUS[@]}"; do
       [ "${R_STATUS[$i]}" = "SKIP" ] && [[ "${R_DETAIL[$i]}" == *"needs root"* ]] && nroot=$((nroot + 1))
     done
-    [ "$nroot" -gt 0 ] && printf '%s%d check(s) skipped without root; run with sudo for the full picture.%s\n' "$C_SKIP" "$nroot" "$C_RST"
+    if [ "$nroot" -gt 0 ]; then
+      local what
+      if [ "$s" -eq 1 ]; then what="the only skipped check needs root"
+      elif [ "$nroot" -eq "$s" ]; then what="all $s skipped checks need root"
+      elif [ "$nroot" -eq 1 ]; then what="1 of $s skipped checks needs root"
+      else what="$nroot of $s skipped checks need root"; fi
+      printf '  %s%s; run with sudo for the full picture.%s\n' "$C_SKIP" "$what" "$C_RST"
+    fi
   fi
   return 0
 }
@@ -289,7 +308,7 @@ render_md() {
       printf '\n## %s\n\n| status | id | check | why | fix |\n|---|---|---|---|---|\n' "${R_MOD[$i]}"
       last="${R_MOD[$i]}"
     fi
-    local fx="${R_FIX[$i]}"; { [ "${R_STATUS[$i]}" = "OK" ] || [ "${R_STATUS[$i]}" = "IGNORED" ]; } && fx=""
+    local fx="${R_FIX[$i]}"; { [ "${R_STATUS[$i]}" = "OK" ] || [ "${R_STATUS[$i]}" = "IGNORED" ] || [ "${R_STATUS[$i]}" = "INFO" ]; } && fx=""
     printf '| %s | %s | %s | %s | %s |\n' "${R_STATUS[$i]}" "${R_ID[$i]}" "$(md_esc "${R_TITLE[$i]}")" "$(md_esc "${R_DETAIL[$i]}")" "${fx:+\`$(md_esc "$fx")\`}"
   done
 }
@@ -299,7 +318,7 @@ render_json() {
   printf '{"tool":"%s","version":"%s","generated_at":"%s","host":"%s",' "$NOSY_NAME" "$NOSY_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$HOST_NAME")"
   printf '"environment":{"os":"%s","os_id":"%s","family":"%s","kernel":"%s","virt":"%s","virt_kind":"%s","provider":"%s","pkg_manager":"%s","init":"%s","firewall":"%s","root":%s},' \
     "$(json_esc "$OS_NAME")" "$(json_esc "$OS_ID")" "$OS_FAMILY" "$(uname -r)" "$(json_esc "$VIRT")" "$VIRT_KIND" "$(json_esc "$PROVIDER")" "$PKG_MGR" "$(json_esc "$INIT_SYS")" "$FW_ACTIVE" "$([ "$IS_ROOT" -eq 1 ] && echo true || echo false)"
-  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)"
+  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d,"info":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)" "$(count_status INFO)"
   for i in "${!R_ID[@]}"; do
     local extra=""
     if [ "${R_STATUS[$i]}" = "IGNORED" ]; then

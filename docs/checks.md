@@ -1,6 +1,6 @@
 # checks
 
-Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). `IGNORED` replaces a `WARN`/`FAIL` you accepted in an ignore file (see the end of this page). Fix commands are suggestions printed by the tool. nosycat never runs them.
+Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). `INFO` is a note about the run itself (ENV-006, not root) and never affects the exit code. `IGNORED` replaces a `WARN`/`FAIL` you accepted in an ignore file (see the end of this page). Fix commands are suggestions printed by the tool. nosycat never runs them.
 
 #### environment
 
@@ -11,7 +11,7 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 | ENV-003 | provider hint (DMI, cloud-init, hostname) | reminds you that provider firewalls/security groups are invisible from inside | info | none |
 | ENV-004 | package manager (apt, dnf/yum, apk, pacman, zypper) | update checks depend on it | WARN | none |
 | ENV-005 | init system (systemd, OpenRC, other) | service checks depend on it | info | none |
-| ENV-006 | running as root | as non-root, shadow, firewall rules, `sshd -T` and process names are hidden | WARN | `sudo ./nosycat.sh` |
+| ENV-006 | running as root | as non-root, shadow, firewall rules, `sshd -T` and process names are hidden. A note about the run, not the server: `INFO`, never in "fix first" or the exit code | INFO | `sudo ./nosycat.sh` |
 
 #### cloud_init
 
@@ -59,7 +59,7 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 | id | what | why it matters | severity | fix |
 |---|---|---|---|---|
 | NET-001 | sockets on `0.0.0.0` / `::` / public IPs, excluding SSH (all its ports) and DHCP. A web server (nginx, apache, caddy, traefik, haproxy, lighttpd, envoy) on tcp 80/443 is expected and only listed in the detail | everything bound there is internet-reachable unless filtered | WARN | bind to 127.0.0.1 or filter |
-| NET-002 | host firewall active (ufw, firewalld, nftables, iptables). For nftables/iptables only chains hooked on **input** count: a `policy drop`, or a drop/reject rule in that chain or in a chain it jumps to. Drops elsewhere (Docker's `DOCKER-ISOLATION-*` on FORWARD) and a lone `ct state invalid drop` do not | FAIL when services are exposed and nothing filters them | FAIL | `ufw allow OpenSSH && ufw enable` |
+| NET-002 | host firewall active (ufw, firewalld, nftables, iptables). For nftables/iptables only chains hooked on **input** count: a `policy drop`, or a drop/reject rule in that chain or in a chain it jumps to. Drops elsewhere (Docker's `DOCKER-ISOLATION-*` on FORWARD), a lone `ct state invalid drop`, ban lists that only drop listed sources (`ip saddr @set`, `-m set --match-set NAME src`, `-s IP -j REJECT`) and the fail2ban/CrowdSec tables (`f2b-*`, `crowdsec*`) do not; the detail says when fail2ban or CrowdSec was seen | FAIL when services are exposed and nothing filters them | FAIL | `ufw allow OpenSSH && ufw enable` |
 | NET-003 | IPv6 covered by the firewall when a global IPv6 exists | ufw `IPV6=no` or ip-only nft tables leave IPv6 wide open | FAIL | `IPV6=yes` / `table inet` |
 | NET-004 | nameserver configured and `example.com` resolves | updates, ACME and outbound APIs fail | FAIL | check resolv.conf / resolved |
 | NET-005 | `net.ipv4.ip_forward` (expected with Docker/VPN) | a plain VPS should not route packets | WARN | `net.ipv4.ip_forward=0` |

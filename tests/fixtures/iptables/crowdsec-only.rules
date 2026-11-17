@@ -1,0 +1,2 @@
+-P INPUT ACCEPT
+-A INPUT -m set --match-set crowdsec-blacklists src -j DROP
