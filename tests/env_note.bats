@@ -40,13 +40,15 @@ setup() { load_nosycat; }
   [[ "$output" == *"· 1 INFO"* ]]
 }
 
-@test "a real non-root run: ENV-006 is INFO and does not set exit code 1 by itself" {
-  [ "$(id -u)" -ne 0 ] || skip "needs a non-root runner"
+@test "a real run: ENV-006 is INFO without root (OK as root) and never sets the exit code by itself" {
+  # (bats' own skip is shadowed by nosycat's skip(), so branch on root instead)
+  local want_env=INFO
+  [ "$(id -u)" -eq 0 ] && want_env=OK   # CI containers run as root
   run bash "$NOSY_SRC/nosycat.sh" --only environment --format json
-  printf '%s' "$output" | jq -e '.checks[] | select(.id == "ENV-006") | .status == "INFO"'
+  printf '%s' "$output" | jq -e --arg s "$want_env" '.checks[] | select(.id == "ENV-006") | .status == $s'
   # the exit code follows WARN/FAIL only (other ENV checks may WARN on the CI host)
   local want
   want="$(printf '%s' "$output" | jq -r 'if .summary.fail > 0 then 2 elif .summary.warn > 0 then 1 else 0 end')"
   [ "$status" -eq "$want" ]
-  printf '%s' "$output" | jq -e '.summary.info == 1'
+  printf '%s' "$output" | jq -e --arg s "$want_env" '.summary.info == (if $s == "INFO" then 1 else 0 end)'
 }
