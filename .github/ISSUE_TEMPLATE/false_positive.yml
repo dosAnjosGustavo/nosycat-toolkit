@@ -1,0 +1,85 @@
+name: false positive / wrong result
+description: a check says OK, WARN, FAIL or SKIP and it should not
+title: "[false positive] CHECK-ID: "
+labels: ["false positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping the cat sniff better ❀
+        Security problem in nosycat itself (a write, command injection, unsafe temp files)? Please do not use this form: report it privately, see SECURITY.md.
+  - type: input
+    id: check_id
+    attributes:
+      label: check id
+      description: the id of the wrong result, as printed by nosycat
+      placeholder: NET-002
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: what went wrong
+      options:
+        - it reports a problem that is not there (false positive)
+        - it misses a real problem (false negative)
+        - it SKIPs when it could check
+        - something else
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: what you expected, and why
+      placeholder: "fail2ban is the only thing in nftables, so NET-002 should not say the firewall is active"
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: distro and version
+      description: "e.g. the PRETTY_NAME from /etc/os-release"
+      placeholder: Debian GNU/Linux 12 (bookworm)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: nosycat version
+      description: output of ./nosycat.sh --version
+      placeholder: nosycat-toolkit 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: root
+    attributes:
+      label: ran as root?
+      options:
+        - "yes (sudo)"
+        - "no"
+    validations:
+      required: true
+  - type: textarea
+    id: json
+    attributes:
+      label: JSON output of the module
+      description: |
+        Run only the module of the check, for example:
+        `sudo ./nosycat.sh --format json --only network`
+        **Redact before pasting:** public IPs, hostnames, domains, user names, container names and anything else you would not post publicly. Replace them with placeholders like 192.0.2.10 or web-01.example.com.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: the config or command output behind it (optional, redacted)
+      description: "e.g. sudo nft list ruleset, sudo sshd -T | grep -i password, ss -tuln. Redact it like the JSON above."
+      render: text
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: before you submit
+      options:
+        - label: I redacted IPs, hostnames, user names and secrets from everything above
+          required: true

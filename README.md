@@ -41,6 +41,7 @@ You just deployed a VPS. It boots, SSH works, the app is up. Then, weeks later, 
 
 - one Linux server, checked locally, right after deploy or after a big change
 - configuration that commonly causes outages, lockouts or exposure: SSH, firewall, listeners, updates, Docker, services, logs, TLS, mounts, databases
+- whether a backup exists, runs by itself, is recent, and lives off the root disk
 - a baseline snapshot and a diff, to see what changed since deploy
 - reports for humans (text, Markdown) and machines (JSON, exit codes)
 
@@ -59,10 +60,11 @@ You just deployed a VPS. It boots, SSH works, the app is up. Then, weeks later, 
 - **read-only.** No service is restarted, no package installed, no config edited, no firewall rule touched. Package checks use local metadata (`apt-get -s`, `dnf check-update`, `apk version`).
 - **only two opt-in writes:** `--snapshot` saves a baseline to its own state dir (`/var/lib/nosycat`, mode 0700), and `--output DIR` writes the report to the directory you choose.
 - **never hangs.** Slow or network-bound commands run under `timeout` (default 10s, `--timeout` to change); missing tools are skipped.
+- **no secrets read.** The backup module never runs a backup tool and never opens a password, env file or keyring; ages come from cache and snapshot metadata.
 - **nothing leaves the server.** No network calls besides a DNS lookup of `example.com` and whatever your package manager does when queried.
 - **works without root,** with reduced visibility: checks that need root are marked `SKIP` instead of guessing.
 
-Read the code before running anything with `sudo`, this one included. It is about 2,100 lines of plain Bash.
+Read the code before running anything with `sudo`, this one included. It is about 2,900 lines of plain Bash. Found a security problem in nosycat itself? See [`SECURITY.md`](SECURITY.md).
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -71,7 +73,7 @@ Read the code before running anything with `sudo`, this one included. It is abou
 Run a tagged release, not `main`: a release is a fixed, reviewed snapshot with a published checksum, while `main` can change under you between reading the code and running it with `sudo`.
 
 ```bash
-VER=0.1.1
+VER=0.2.0
 BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
 curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz"
 curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz.sha256"
@@ -84,7 +86,7 @@ Prefer a single file you can `scp` to the server? Each release also ships `nosyc
 
 ```bash
 # on your machine
-VER=0.1.1
+VER=0.2.0
 BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
 curl -fsSLO "$BASE/nosycat.sh" && curl -fsSLO "$BASE/nosycat.sh.sha256"
 sha256sum -c nosycat.sh.sha256                        # must print: nosycat.sh: OK
@@ -97,6 +99,7 @@ sha256sum -c nosycat.sh.sha256 && chmod +x nosycat.sh && sudo ./nosycat.sh
 The checksum guards against a corrupted or swapped download; compare it with the one on the [release page](https://github.com/trizdev/nosycat-toolkit/releases) too. Hacking on it instead? `git clone` the repo and run `./nosycat.sh` from your checkout.
 
 ```bash
+sudo ./nosycat.sh -q                                # only WARN/FAIL + the summary
 sudo ./nosycat.sh --only access,network,docker     # just a few modules
 sudo ./nosycat.sh --skip updates                    # everything but updates
 sudo ./nosycat.sh --format json > report.json       # machine-readable
@@ -105,6 +108,7 @@ sudo ./nosycat.sh --snapshot                        # right after deploy
 sudo ./nosycat.sh --diff                            # later: what changed?
 sudo ./nosycat.sh --color always | less -R          # keep the colors in a pager
 sudo ./nosycat.sh --ascii                           # plain ASCII box and symbols
+sudo ./nosycat.sh --only backup --backup-max-age 2  # nightly backups: warn after 2 days
 ```
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
@@ -114,7 +118,7 @@ sudo ./nosycat.sh --ascii                           # plain ASCII box and symbol
 > fabricated example for documentation (host `web-01.example.com`, address from the `192.0.2.0/24` documentation range). Abridged.
 
 ```
-  v0.1.1 · host web-01.example.com · 2026-11-16 18:02 UTC · read-only
+  v0.2.0 · host web-01.example.com · 2026-11-16 18:02 UTC · read-only
   note: running as deploy (not root), so some checks are SKIPped. use sudo for the full picture.
 
 ❀ environment
@@ -134,40 +138,68 @@ sudo ./nosycat.sh --ascii                           # plain ASCII box and symbol
 ❀ system
   [WARN] SYS-005  no swap configured (1963 MiB RAM)
                   why: on small VPS a memory spike (apt, composer, builds) triggers the OOM killer instead of slowing down
+                  fix: sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 
 ❀ access
   [FAIL] SSH-002  SSH password authentication is enabled
                   why: internet-facing SSH with passwords is brute-forced within minutes of deploy
+                  fix: set PasswordAuthentication no (check sshd_config.d drop-ins too) && sudo systemctl reload ssh
   [OK]   SSH-006  non-root admin user(s): deploy
 
 ❀ network
-  [OK]   NET-001  only SSH and the web server listen on public interfaces
-                  why: web server on 80/443 is expected: 80/tcp(nginx), 443/tcp(nginx)
+  [IGN]  NET-001  1 service(s) listening on all interfaces: 3000/tcp(grafana)
+                  why: ignored, was WARN: grafana is behind the provider firewall · anything bound to 0.0.0.0/:: is reachable from the internet unless a firewall blocks it
   [OK]   NET-002  host firewall active: ufw
+
+❀ updates
+  [WARN] UPD-001  14 pending updates (6 security)
+                  why: security fixes are public, exploits follow within days
+                  fix: sudo apt-get update && sudo apt-get upgrade
 
 ❀ docker
   [FAIL] DKR-005  ports published on all interfaces: grafana 3000>3000/tcp
                   why: Docker writes its own iptables rules, so these ports are public even if ufw denies them
                   fix: publish as '127.0.0.1:8080:80' behind a reverse proxy, or filter in the DOCKER-USER chain
   [WARN] DKR-007  json-file logs without size limit: grafana, app
+                  why: container logs grow until the disk is full
+                  fix: set log-opts max-size/max-file in /etc/docker/daemon.json
+
+❀ services
+  [WARN] SVC-004  journal has no size cap (SystemMaxUse)
+                  why: ignore expired 2026-11-10 (journal cap on the todo list) · the default is 10% of the filesystem, up to 4G
+                  fix: printf '[Journal]\nSystemMaxUse=500M\n' | sudo tee /etc/systemd/journald.conf.d/size.conf
+
+❀ security
+  [IGN]  SEC-005  /tmp is not mounted noexec
+                  why: ignored, was WARN: installer needs exec (until 2027-01-31)
 
 ❀ databases
   [OK]   DB-001   databases bound to loopback only: postgresql on 127.0.0.1:5432
 
+❀ backup
+  [OK]   BKP-001  backup tools: restic
+                  why: provider snapshots (Hetzner, DigitalOcean, Contabo...) cannot be seen from inside the VM; only tools on this server are checked
+  [OK]   BKP-002  backup job scheduled
+                  why: systemd restic-backup.timer
+  [SKIP] BKP-003  age of the last backup
+                  why: needs root to read root's backup caches and repositories
+  [SKIP] BKP-004  backups stored off the root disk
+                  why: backup destination not visible (remote, or set in a config nosycat does not read)
+
 .·:*¨¨* ❀ *¨¨*:·.
 
-  ╭─ summary ────────────────────────────────────── 28 checks ─╮
-  │ ✗ 2 FAIL   ! 5 WARN   ✓ 16 OK   · 5 SKIP                   │
-  │ ████▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░ │
+  ╭─ summary ────────────────────────────────────── 41 checks ─╮
+  │ ✗ 2 FAIL   ! 6 WARN   ✓ 26 OK   · 5 SKIP   ~ 2 IGN         │
+  │ ███▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░ │
   ╰────────────────────────────────────────────────────────────╯
 
 ❀ by module
   environment ✓ ok                  cloud_init  ! 1 warn
   system      ! 1 warn              access      ✗ 1 fail
   network     ! 1 warn              updates     ! 1 warn
-  docker      ✗ 1 fail ! 1 warn     services    ✓ ok
+  docker      ✗ 1 fail ! 1 warn     services    ! 1 warn
   web_tls     ✓ ok                  security    ✓ ok
-  databases   ✓ ok
+  databases   ✓ ok                  backup      ✓ ok
 
 ❀ fix first
   ✗ SSH-002  SSH password authentication is enabled
@@ -177,9 +209,33 @@ sudo ./nosycat.sh --ascii                           # plain ASCII box and symbol
   ! NET-005  net.ipv4.ip_forward=1
   ! UPD-001  14 pending updates (6 security)
   ! DKR-007  json-file logs without size limit: grafana, app
+  ! SVC-004  journal has no size cap (SystemMaxUse)
 
   =x.x=  2 hard failure(s). fix the FAIL items first!
   4 of 5 skipped checks need root; run with sudo for the full picture.
+  1 ignore expired: SVC-004. renew the date or fix it.
+  tip: 1 ignore without an expiry; add "until YYYY-MM-DD" so accepted risks come back.
+```
+
+The second time you run it you usually want only what needs attention. `-q` / `--problems-only` prints the WARN and FAIL checks with their why and fix, then the same summary:
+
+```
+❀ nosycat-toolkit v0.2.0 · host web-01.example.com · 2026-11-16 18:02 UTC · problems only
+  note: not root, some checks SKIP; sudo shows everything.
+
+❀ access
+  [FAIL] SSH-002  SSH password authentication is enabled
+                  why: internet-facing SSH with passwords is brute-forced within minutes of deploy
+                  fix: set PasswordAuthentication no (check sshd_config.d drop-ins too) && sudo systemctl reload ssh
+
+❀ services
+  [WARN] SVC-004  journal has no size cap (SystemMaxUse)
+                  why: ignore expired 2026-11-10 (journal cap on the todo list) · the default is 10% of the filesystem, up to 4G
+                  fix: printf '[Journal]\nSystemMaxUse=500M\n' | sudo tee /etc/systemd/journald.conf.d/size.conf
+
+.·:*¨¨* ❀ *¨¨*:·.
+
+  … the same summary card as above
 ```
 
 In a terminal the summary card is colored with a pastel palette: rose FAIL, peach WARN, mint OK, lavender SKIP, a lilac box and a rainbow ❀ divider; the bar is split by status. Colors turn off by themselves when the output is piped or saved with `--output`, when `NO_COLOR` is set, or with `TERM=dumb`; `--color always|never` overrides that. The box, bar and symbols fall back to plain ASCII when the locale is not UTF-8, or with `--ascii`.
@@ -201,6 +257,7 @@ In a terminal the summary card is colored with a pastel palette: rose FAIL, peac
 | `web_tls` | `nginx -t`, default site, apache configtest, certificates expiring in < 21 days, certbot renewal timer |
 | `security` | fail2ban / CrowdSec, SELinux / AppArmor, world-writable files, unexpected SUID, `/tmp` noexec, fstab `nofail` |
 | `databases` | MySQL/MariaDB, PostgreSQL, Redis, MongoDB, Memcached, Elasticsearch… on non-loopback, Redis without auth |
+| `backup` | restic, borg/borgmatic, rsnapshot, timeshift, duplicity, duplicati, kopia: installed, scheduled (cron, systemd timers), age of the last backup, stored off the root disk. Never reads a password |
 | `snapshot` | `--snapshot` / `--diff`: listeners, services, users, admin groups, cron, authorized_keys, packages, containers |
 
 Every check, with its id, rationale, severity and fix, is listed in [`docs/checks.md`](docs/checks.md).
@@ -213,7 +270,11 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 |---|---|
 | `text` | colored terminal output, printed as checks run, ending in a summary card: counts and a status bar, status by module, the top FAIL/WARN items to fix first and a verdict (default) |
 | `md` | Markdown report with an environment table and one table per module |
-| `json` | `{tool, version, host, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` (plus `original_status` and `ignore_reason` when ignored) |
+| `json` | `{schema_version, tool, version, host, problems_only, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` (plus `original_status`, `ignore_reason` and `ignore_until` when ignored, `ignore_expired` when an ignore ran out). Fields and the stability policy: [`docs/json.md`](docs/json.md) |
+
+**`-q` / `--problems-only`** works with every format: `text` prints only WARN/FAIL checks (with why and fix), a one-line banner and the summary; `md` keeps only the WARN/FAIL rows; `json` keeps only WARN/FAIL in `checks[]` and sets `"problems_only": true`. The summary counts and the exit code always cover every check.
+
+**`schema_version`** (`"1"` today) is the first field of the JSON report. New fields, modules and check ids keep the same version; removing or renaming a field, changing a type or adding a `status` value bumps it. Pin it in your pipeline: `jq -e '.schema_version == "1"'`.
 
 | exit code | meaning |
 |---|---|
@@ -231,11 +292,14 @@ Some WARNs are deliberate on your server. List them once and they stop turning e
 ```
 # /var/lib/nosycat/.nosycat.ignore  (read automatically; or pass --ignore FILE)
 NET-001: grafana on 3000 is behind the provider firewall
-SEC-005: the installer needs exec on /tmp
-SNP-*
+SEC-005: installer needs exec until 2027-01-31
+BKP-001: provider snapshots, daily until 2027-06-30
+SNP-* until 2026-12-31
 ```
 
 One check id per line, optionally `: reason`; globs like `SNP-*` work. Matching WARN/FAIL results are shown as `IGNORED` with your reason, kept in the JSON with their original status, and left out of the exit code. A web server on 80/443 and `/dev/shm` without `noexec` (the Debian default) no longer warn, so most servers need few entries.
+
+An accepted risk should come back for review, so an entry can end in **`until YYYY-MM-DD`** (with or without a reason). It applies through that day; from the next day the check shows its real status again with `ignore expired DATE (reason)` in its detail, counts for the exit code, and the summary lists it. Entries without a date stay permanent, and the summary gently suggests adding one. An invalid date (`2027-02-30`) prints a warning and skips that entry, so the finding shows.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -273,7 +337,9 @@ One check id per line, optionally `: reason`; globs like `SNP-*` work. Matching 
 - [x] config file to silence accepted findings (`.nosycat.ignore`)
 - [ ] JSON lines output (one event per check) for SIEM ingestion
 - [ ] Podman and rootless Docker checks
-- [ ] backup presence and age (restic, borg, provider snapshots)
+- [x] backup presence, schedule and age (restic, borg, rsnapshot, timeshift, duplicity, duplicati, kopia)
+- [x] expiry dates for accepted findings (`until YYYY-MM-DD`)
+- [x] `--problems-only` / `-q` lean output
 - [ ] kernel hardening sysctl profile (`kptr_restrict`, `dmesg_restrict`, `rp_filter`)
 - [ ] remote mode over SSH for several hosts
 - [x] bats test suite with fixture configs
@@ -282,13 +348,15 @@ One check id per line, optionally `: reason`; globs like `SNP-*` work. Matching 
 
 #### tests
 
-The parsers and checks are tested with [bats](https://github.com/bats-core/bats-core) against fixture files (`tests/fixtures`: nft rulesets, `ss` output, `sshd -T`, certificates, mounts) and small fake commands (`tests/stubs`: `docker`, `redis-cli`, `dpkg`). The `NOSY_FX_*` and `NOSY_ETC` variables point nosycat at those fixtures; normal runs never set them.
+The parsers and checks are tested with [bats](https://github.com/bats-core/bats-core) against fixture files (`tests/fixtures`: nft rulesets, `ss` output, `sshd -T`, certificates, mounts) and small fake commands (`tests/stubs`: `docker`, `redis-cli`, `dpkg`). The `NOSY_FX_*` (including `NOSY_FX_TODAY` / `NOSY_FX_NOW` for the clock), `NOSY_ETC` and `NOSY_FS` variables point nosycat at those fixtures; normal runs never set them.
 
 ```bash
 bats tests/
 ```
 
 CI runs ShellCheck, the bats suite on Ubuntu, Debian, Rocky Linux and Alpine, and a full read-only run in each of those containers.
+
+A check got it wrong on your server? Open a [false positive issue](https://github.com/trizdev/nosycat-toolkit/issues/new?template=false_positive.yml): it asks for the check id, the distro and the `--format json --only <module>` output (redacted).
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 

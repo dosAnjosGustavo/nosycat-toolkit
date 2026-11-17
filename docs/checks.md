@@ -1,6 +1,6 @@
 # checks
 
-Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). `INFO` is a note about the run itself (ENV-006, not root) and never affects the exit code. `IGNORED` replaces a `WARN`/`FAIL` you accepted in an ignore file (see the end of this page). Fix commands are suggestions printed by the tool. nosycat never runs them.
+Every check `nosycat.sh` runs. **Severity** is the worst status a check can return; `SKIP` is used whenever a check does not apply (tool not installed, inside a container, not root). `INFO` is a note about the run itself (ENV-006, not root) and never affects the exit code. `IGNORED` replaces a `WARN`/`FAIL` you accepted in an ignore file (see the end of this page). With `-q` / `--problems-only` only `WARN`/`FAIL` checks are printed. The JSON format is described in [`json.md`](json.md). Fix commands are suggestions printed by the tool. nosycat never runs them.
 
 #### environment
 
@@ -126,16 +126,32 @@ Skipped entirely when Docker is not installed.
 | DB-001 | MySQL/MariaDB, PostgreSQL, Redis, MongoDB, Memcached, Elasticsearch, CouchDB, InfluxDB listening beyond loopback (default port or process name) | exposed databases are scanned and ransomed within hours; private-network = WARN | FAIL | bind to 127.0.0.1 and firewall |
 | DB-002 | Redis answers `PING` without auth, probed on the host:port it actually listens on. OK only on a `NOAUTH` reply; `DENIED` (protected mode, no password) is a WARN; no connection is a SKIP with the reason | data read/write, file writes via `CONFIG SET` | FAIL (if public) | `requirepass` / ACLs |
 
+#### backup
+
+Read-only and secret-free: nosycat never runs a backup tool, and never asks for or reads a password, env file, keyring or repository key. Cron lines and unit files are scanned for a backup command and a local repository path; the lines themselves are never printed. Provider snapshots (Hetzner, DigitalOcean, Contabo…) cannot be seen from inside the VM: if they are your backup, accept BKP-001 in `.nosycat.ignore` with an `until` date.
+
+| id | what | why it matters | severity | fix |
+|---|---|---|---|---|
+| BKP-001 | a backup tool is installed: restic, borg/borgmatic, rsnapshot, timeshift, duplicity, duplicati, kopia | no backup is the problem you only find out about during the outage | WARN | install restic or borg with a repository off the server |
+| BKP-002 | the backup runs by itself: `/etc/crontab`, `/etc/cron.d`, `/etc/cron.{hourly,daily,weekly,monthly}`, the cron spool, enabled systemd timers (a `*.wants/` link) whose name or service mentions a backup tool, timeshift's own schedule, duplicati/kopia server units. Commented-out lines do not count. As non-root, an empty result is a SKIP (root's crontab is not readable) | a backup that runs by hand stops running | WARN | a systemd service + timer, or a `/etc/cron.d` entry |
+| BKP-003 | age of the newest backup, from metadata readable without a password: restic cache (`~/.cache/restic/*/snapshots`) or a local repo's `snapshots/`, borg `~/.config/borg/security/*/manifest-timestamp`, rsnapshot `<snapshot_root>/<interval>.0`, timeshift snapshot names, duplicity cache. kopia and duplicati keep this behind the password or in their database, so it is a SKIP with the reason | a job that fails quietly looks exactly like one that works | WARN (older than `--backup-max-age`, default 7 days) | read the job's log, run it once by hand, test a restore |
+| BKP-004 | where local backups live: rsnapshot root, local restic/borg repo, timeshift snapshots on the same filesystem as `/`. OK when a remote repository is in use or the target is a separate filesystem; SKIP when the destination is not visible | a copy on the same disk dies with the disk, and with the server | WARN | send a copy off the server (storage box, S3, another host) |
+
 #### ignoring accepted findings
 
-Put check ids in `.nosycat.ignore` inside the state dir (`/var/lib/nosycat/.nosycat.ignore` as root) or pass `--ignore FILE` (repeatable). Matching `WARN`/`FAIL` results are reported as `IGNORED` with the reason, keep their original status in JSON (`original_status`, `ignore_reason`), and do not affect the exit code. `OK` and `SKIP` results are never changed.
+Put check ids in `.nosycat.ignore` inside the state dir (`/var/lib/nosycat/.nosycat.ignore` as root) or pass `--ignore FILE` (repeatable). Matching `WARN`/`FAIL` results are reported as `IGNORED` with the reason, keep their original status in JSON (`original_status`, `ignore_reason`, `ignore_until`), and do not affect the exit code. `OK` and `SKIP` results are never changed.
 
 ```
-# one per line: ID, ID: reason, or a glob
+# one per line: ID, ID: reason, or a glob; optionally "until YYYY-MM-DD"
 NET-001: grafana on 3000 is behind the provider firewall
-SEC-005: /tmp needs exec for the installer
-SNP-*
+SEC-005: installer needs exec until 2027-01-31
+BKP-001: provider snapshots, daily until 2027-06-30
+SNP-* until 2026-12-31
 ```
+
+- **expiry:** `until YYYY-MM-DD` is the last day the entry applies. From the next day the check shows its real status again, its detail starts with `ignore expired DATE (reason)`, it counts for the exit code, JSON adds `ignore_expired` (and `summary.ignore_expired`), and the summary lists the expired ids. The date is the server's local date.
+- **no expiry:** the entry is permanent, and the text summary adds a gentle tip to set one, so accepted risks come back for review instead of being swept under the rug.
+- **invalid dates** (`2027-02-30`, `31/01/2027`) print a warning on stderr and the entry is skipped, so the finding shows; the run continues. `until` only counts when the word after it starts with a digit, so a reason like `open until we move to the vpn` stays a reason.
 
 #### snapshot (`--diff`)
 

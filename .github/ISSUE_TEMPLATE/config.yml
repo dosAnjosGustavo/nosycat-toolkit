@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: report a security vulnerability (private)
+    url: https://github.com/trizdev/nosycat-toolkit/security/advisories/new
+    about: writes, command injection, unsafe temp files or leaked secrets in nosycat itself. Please do not open a public issue.
