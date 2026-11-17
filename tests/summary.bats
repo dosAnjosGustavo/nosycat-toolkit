@@ -37,10 +37,10 @@ setup() {
   run summary
   [ "$status" -eq 0 ]
   local box widths
-  box="$(printf '%s\n' "$output" | grep -E '^ (╭|│|╰)')"
+  box="$(printf '%s\n' "$output" | grep -E '^  (╭|│|╰)')"
   [ "$(printf '%s\n' "$box" | wc -l)" -eq 4 ]
   widths="$(printf '%s\n' "$box" | dwidth | sort -u)"
-  [ "$widths" = "$((SUM_W + 5))" ]
+  [ "$widths" = "$((SUM_W + 6))" ]
   while read -r w; do [ "$w" -le 80 ]; done < <(printf '%s\n' "$output" | dwidth)
 }
 
@@ -49,7 +49,7 @@ setup() {
   fake_results warn
   run summary
   [[ "$output" == *$'\033['* ]]
-  [ "$(printf '%s\n' "$output" | grep -E $'^ (\033\\[[0-9;]*m)*(╭|│|╰)' | dwidth | sort -u)" = "$((SUM_W + 5))" ]
+  [ "$(printf '%s\n' "$output" | grep -E $'^  (\033\\[[0-9;]*m)*(╭|│|╰)' | dwidth | sort -u)" = "$((SUM_W + 6))" ]
 }
 
 @test "bar is proportional, sums to the box width, and keeps tiny counts visible" {
@@ -67,7 +67,7 @@ setup() {
   fake_results warn
   run summary
   local rows
-  rows="$(printf '%s\n' "$output" | sed -n '/^by module/,/^$/p' | sed '1d;/^$/d')"
+  rows="$(printf '%s\n' "$output" | sed -n '/^❀ by module$/,/^$/p' | sed '1d;/^$/d')"
   [ "$(printf '%s\n' "$rows" | wc -l)" -eq 2 ]
   [[ "$rows" == *"environment ! 1 warn"*"access      ✓ ok"* ]]
   # second column starts at the same display column on every row: 2 + name 12 + cell 20 + gap 2
@@ -80,7 +80,7 @@ setup() {
   fake_results fail
   run summary
   local ff
-  ff="$(printf '%s\n' "$output" | sed -n '/^fix first/,/^$/p')"
+  ff="$(printf '%s\n' "$output" | sed -n '/^❀ fix first$/,/^$/p')"
   [ "$(printf '%s\n' "$ff" | sed -n 2p | grep -c 'NET-002')" -eq 1 ]
   [[ "$ff" == *"+3 more (scroll up for why and fix)"* ]]
   [ "$(printf '%s\n' "$ff" | grep -cE '^  (✗|!) ')" -eq "$FIX_FIRST_MAX" ]
@@ -98,13 +98,42 @@ setup() {
   [[ "$output" != *"fix first"* ]]
 }
 
-@test "skip note only counts checks skipped for lack of root" {
+@test "skip note says how many of the skipped checks need root" {
   fake_results warn
   run summary
-  [[ "$output" == *"1 check(s) skipped without root; run with sudo for the full picture."* ]]
+  # 1 SKIP in the box, and it is the one that needs root
+  [[ "$output" == *"1 SKIP"* ]]
+  [[ "$output" == *"  the only skipped check needs root; run with sudo for the full picture."* ]]
+  skip SYS-099 "swap" "no swap file"; skip SYS-098 "ntp" "needs root to read chrony"
+  run summary
+  [[ "$output" == *"3 SKIP"* ]]
+  [[ "$output" == *"  2 of 3 skipped checks need root; run with sudo for the full picture."* ]]
+  R_STATUS[${#R_STATUS[@]}-2]=OK
+  run summary
+  [[ "$output" == *"  all 2 skipped checks need root; run with sudo for the full picture."* ]]
+  skip SYS-097 "x" "not applicable"; skip SYS-096 "y" "not applicable"; skip SYS-095 "z" "not applicable"
+  run summary
+  [[ "$output" == *"  2 of 5 skipped checks need root; run with sudo for the full picture."* ]]
+  [[ "$output" != *"check(s) skipped without root"* ]]
   IS_ROOT=1
   run summary
-  [[ "$output" != *"skipped without root"* ]]
+  [[ "$output" != *"need root"* ]] && [[ "$output" != *"needs root;"* ]]
+}
+
+@test "summary indentation: headings at column 0, everything else at exactly 2" {
+  fake_results fail
+  run summary
+  local line bad=0
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      "❀ "*|".·:*"*) ;;                 # section heading or divider
+      "  "[!\ ]*) ;;                    # content
+      *) echo "bad indent: [$line]"; bad=1 ;;
+    esac
+  done <<<"$output"
+  [ "$bad" -eq 0 ]
+  [[ "$output" == *$'\n❀ by module\n'* ]] && [[ "$output" == *$'\n❀ fix first\n'* ]]
 }
 
 @test "NO_COLOR, non-TTY and TERM=dumb disable colors in auto mode" {
@@ -129,7 +158,8 @@ setup() {
   NOSY_LOCALE=C; setup_glyphs
   run summary
   [ "$(printf '%s' "$output" | LC_ALL=C tr -d '\000-\177' | wc -c)" -eq 0 ]
-  [[ "$output" == *" +- summary -"* ]]
+  [[ "$output" == *$'\n  +- summary -'* ]]
+  [[ "$output" == *$'\n@ by module\n'* ]]
   NOSY_LOCALE=C.UTF-8 ASCII_MODE=on; setup_glyphs
   run summary
   [ "$(printf '%s' "$output" | LC_ALL=C tr -d '\000-\177' | wc -c)" -eq 0 ]
