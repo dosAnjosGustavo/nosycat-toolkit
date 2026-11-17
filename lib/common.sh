@@ -201,8 +201,17 @@ ignore_match() {
 
 # record STATUS ID TITLE [DETAIL] [FIX]
 # WARN/FAIL results whose id is in the ignore list are stored as IGNORED.
+# _trim TEXT -> TEXT without leading/trailing whitespace (lists built with
+# `tr '\n' ' '` end in a space).
+_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
 record() {
   local st="$1" id="$2" title="$3" detail="${4:-}" fix="${5:-}" orig="" note=""
+  title="$(_trim "$title")"; detail="$(_trim "$detail")"; fix="$(_trim "$fix")"
   if { [ "$st" = "WARN" ] || [ "$st" = "FAIL" ]; } && [ "${#IGNORE_PAT[@]}" -gt 0 ] && note="$(ignore_match "$id")"; then
     orig="$st"; st="IGNORED"
     detail="ignored, was $orig${note:+: $note}${detail:+ · $detail}"
