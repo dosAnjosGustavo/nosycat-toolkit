@@ -234,11 +234,11 @@ print_check_line() {
   local st="$1" id="$2" title="$3" detail="$4" fix="$5" col label="$1"
   if ! use_utf8; then title="$(_asciify "$title")"; detail="$(_asciify "$detail")"; fi
   case "$st" in
-    OK) col="$C_OK" ;; WARN) col="$C_WARN" ;; FAIL) col="$C_FAIL" ;; IGNORED) col="$C_IGN"; label="IGN" ;; *) col="$C_SKIP" ;;
+    OK) col="$C_OK" ;; WARN) col="$C_WARN" ;; FAIL) col="$C_FAIL" ;; IGNORED) col="$C_IGN"; label="IGN" ;; INFO) col="$C_SKY" ;; *) col="$C_SKIP" ;;
   esac
   printf '  %s%-6s%s %s%-8s%s %s\n' "$col$C_BOLD" "[$label]" "$C_RST" "$C_LILAC" "$id" "$C_RST" "$title"
   if [ -n "$detail" ]; then printf '                  %swhy:%s %s%s%s\n' "$C_SKIP" "$C_RST" "$C_DIM" "$detail" "$C_RST"; fi
-  if [ -n "$fix" ] && [ "$st" != "OK" ] && [ "$st" != "IGNORED" ]; then printf '                  %sfix:%s %s%s%s\n' "$col" "$C_RST" "$C_SKY" "$fix" "$C_RST"; fi
+  if [ -n "$fix" ] && [ "$st" != "OK" ] && [ "$st" != "IGNORED" ] && [ "$st" != "INFO" ]; then printf '                  %sfix:%s %s%s%s\n' "$col" "$C_RST" "$C_SKY" "$fix" "$C_RST"; fi
 }
 
 module_header() {

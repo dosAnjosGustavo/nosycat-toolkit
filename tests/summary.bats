@@ -15,7 +15,7 @@ dwidth() {
 # fake_results MODE -> fill the result store with a fixed set of checks.
 fake_results() {
   local i
-  CUR_MOD=environment; ok ENV-001 "distribution: Ubuntu 24.04"; warn ENV-006 "running as deploy (not root)"
+  CUR_MOD=environment; ok ENV-001 "distribution: Ubuntu 24.04"; warn ENV-007 "clock is 3 minutes off"; record INFO ENV-006 "running as deploy (not root)" "reduced visibility"
   CUR_MOD=access; ok SSH-002 "password auth off"; skip SSH-009 "empty passwords" "needs root to read /etc/shadow"
   CUR_MOD=network
   [ "$1" = fail ] && fail NET-002 "no host firewall" "INPUT policy accept" "sudo ufw enable"

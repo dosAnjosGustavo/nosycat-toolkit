@@ -8,7 +8,7 @@ count_status() {
   echo "$n"
 }
 
-# final_exit_code -> 2 on any FAIL, 1 on any WARN, else 0 (IGNORED/SKIP do not count).
+# final_exit_code -> 2 on any FAIL, 1 on any WARN, else 0 (IGNORED/SKIP/INFO do not count).
 final_exit_code() {
   if [ "$(count_status FAIL)" -gt 0 ]; then echo 2
   elif [ "$(count_status WARN)" -gt 0 ]; then echo 1
@@ -16,7 +16,12 @@ final_exit_code() {
 }
 
 # _ign_summary -> " · N IGNORED" when something was ignored.
-_ign_summary() { local n; n="$(count_status IGNORED)"; [ "$n" -gt 0 ] && printf ' · %d IGNORED' "$n"; }
+_ign_summary() {
+  local n
+  n="$(count_status IGNORED)"; [ "$n" -gt 0 ] && printf ' · %d IGNORED' "$n"
+  n="$(count_status INFO)"; [ "$n" -gt 0 ] && printf ' · %d INFO' "$n"
+  return 0
+}
 
 json_esc() {
   local s="$1"
@@ -184,6 +189,7 @@ _module_cell() {
   local m="$1" i nf=0 nw=0 no=0 ns=0 ni=0
   for i in "${!R_MOD[@]}"; do
     [ "${R_MOD[$i]}" = "$m" ] || continue
+    [ "${R_STATUS[$i]}" = "INFO" ] && continue
     case "${R_STATUS[$i]}" in FAIL) nf=$((nf + 1)) ;; WARN) nw=$((nw + 1)) ;; OK) no=$((no + 1)) ;; IGNORED) ni=$((ni + 1)) ;; *) ns=$((ns + 1)) ;; esac
   done
   _ln_reset
@@ -192,7 +198,8 @@ _module_cell() {
   if [ $((nf + nw)) -eq 0 ]; then
     if [ "$no" -gt 0 ]; then _ln_add "$G_OK ok" "$C_OK"
     elif [ "$ns" -gt 0 ]; then _ln_add "$G_SKIP skipped" "$C_SKIP"
-    else _ln_add "$G_IGN ignored" "$C_IGN"; fi
+    elif [ "$ni" -gt 0 ]; then _ln_add "$G_IGN ignored" "$C_IGN"
+    else _ln_add "$G_OK ok" "$C_OK"; fi   # only INFO notes
   fi
 }
 
@@ -301,7 +308,7 @@ render_md() {
       printf '\n## %s\n\n| status | id | check | why | fix |\n|---|---|---|---|---|\n' "${R_MOD[$i]}"
       last="${R_MOD[$i]}"
     fi
-    local fx="${R_FIX[$i]}"; { [ "${R_STATUS[$i]}" = "OK" ] || [ "${R_STATUS[$i]}" = "IGNORED" ]; } && fx=""
+    local fx="${R_FIX[$i]}"; { [ "${R_STATUS[$i]}" = "OK" ] || [ "${R_STATUS[$i]}" = "IGNORED" ] || [ "${R_STATUS[$i]}" = "INFO" ]; } && fx=""
     printf '| %s | %s | %s | %s | %s |\n' "${R_STATUS[$i]}" "${R_ID[$i]}" "$(md_esc "${R_TITLE[$i]}")" "$(md_esc "${R_DETAIL[$i]}")" "${fx:+\`$(md_esc "$fx")\`}"
   done
 }
@@ -311,7 +318,7 @@ render_json() {
   printf '{"tool":"%s","version":"%s","generated_at":"%s","host":"%s",' "$NOSY_NAME" "$NOSY_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$HOST_NAME")"
   printf '"environment":{"os":"%s","os_id":"%s","family":"%s","kernel":"%s","virt":"%s","virt_kind":"%s","provider":"%s","pkg_manager":"%s","init":"%s","firewall":"%s","root":%s},' \
     "$(json_esc "$OS_NAME")" "$(json_esc "$OS_ID")" "$OS_FAMILY" "$(uname -r)" "$(json_esc "$VIRT")" "$VIRT_KIND" "$(json_esc "$PROVIDER")" "$PKG_MGR" "$(json_esc "$INIT_SYS")" "$FW_ACTIVE" "$([ "$IS_ROOT" -eq 1 ] && echo true || echo false)"
-  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)"
+  printf '"summary":{"ok":%d,"warn":%d,"fail":%d,"skip":%d,"ignored":%d,"info":%d},"checks":[' "$(count_status OK)" "$(count_status WARN)" "$(count_status FAIL)" "$(count_status SKIP)" "$(count_status IGNORED)" "$(count_status INFO)"
   for i in "${!R_ID[@]}"; do
     local extra=""
     if [ "${R_STATUS[$i]}" = "IGNORED" ]; then
