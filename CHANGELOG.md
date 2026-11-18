@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - Unreleased
+
+### fixed
+
+- **`.nosycat.ignore` and `#`:** a `#` inside a reason no longer cuts the line. Before, `BKP-001: see ticket #123 until 2026-11-01` lost its date and silently became a permanent ignore; now the reason keeps `#123` and the entry expires. `#` starts a comment only at the start of a line or right after the id.
+- **`.nosycat.ignore` and `until`:** matched in any case (`Until`, `UNTIL`), so those entries no longer become permanent. A trailing `until` without a date is a warning on stderr and the entry is skipped, like an invalid date.
+- **BKP-004:** repository paths are resolved with `stat -L`, so `/backup` as a symlink to a second volume is no longer "stored on the root filesystem". When `stat` cannot tell, the path is never counted as a separate filesystem (SKIP with "could not determine" when nothing else is known).
+- **JSON:** bytes that are not valid UTF-8 (for example a SUID file named `/tmp/nosy\xffbad`) are replaced with `?`, so the report always parses as UTF-8. Before, any local user could make the JSON unreadable for Python-based consumers.
+- **BKP-002:** a backup tool named only in a trailing cron comment (`sync.sh  # TODO: switch to restic`) is no longer a schedule; commented text is also ignored when looking for restic repository paths.
+- **BKP-003:** timeshift snapshot names are read as local time (they were taken as UTC). The age is compared in seconds against `--backup-max-age`, so 7 days and 5 hours is over a 7-day limit (it used to pass as "7 days"); ages under a day are shown in hours.
+- **BKP-003:** with borgmatic and no readable borg metadata, the SKIP now says why instead of ending in an empty "cannot tell without a password:".
+- **Markdown:** `*`, `_`, `` ` ``, `[`, `]`, `<`, `>` and `\` in titles and details are escaped (only `|` was), and fixes stay intact code spans. With `--ascii` or a non-UTF-8 locale the report is plain ASCII.
+- **CLI:** empty `--only=`, `--skip=`, `--format=`, `--output=`, `--state-dir=` and `--ignore=` are usage errors (exit 3) instead of being ignored. `--timeout` must be 1 or more (`timeout 0` meant no limit) and also accepts `--timeout=N`. `--list` prints only the modules `--only` / `--skip` accept (`snapshot` is the `--snapshot` / `--diff` mode, not a module).
+- **SSH-006:** without root, when no sudo/wheel/admin member is found and the sudoers files cannot be read, it is a SKIP instead of a WARN. Sudoers are read from `$ETC` (fixtures), `%group ALL=... ALL` lines count the group's members, partial grants (`user ALL=(ALL) /usr/bin/systemctl`) and `User_Alias` names do not, and `root` in an admin group is no longer listed as a non-root admin.
+
+### docs
+
+- `docs/json.md`: `ignore_expired` is the entry's `until` date (the last day it applied), not the day it expired.
+- README and `docs/checks.md`: comment rules and case-insensitive `until` in `.nosycat.ignore`; BKP-003 caveat that restic/borg metadata is also refreshed by read-only commands like `restic snapshots` or `borg list`.
+
 ## [0.2.0] - 2026-11-18
 
 ### added

@@ -36,7 +36,7 @@ setup() { load_nosycat; }
   HOST_NAME=h OS_NAME=x VIRT=kvm PROVIDER=none INIT_SYS=systemd OS_ID=x
   run render_json
   printf '%s' "$output" | jq -e '.summary.info == 1 and .summary.warn == 0'
-  run render_md
+  NOSY_LOCALE=C.UTF-8 run render_md
   [[ "$output" == *"· 1 INFO"* ]]
 }
 

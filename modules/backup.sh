@@ -56,12 +56,28 @@ _bkp_mtime_max() {
   stat -c %Y -- "${ex[@]}" 2>/dev/null | sort -n | tail -n 1
 }
 
-# _bkp_same_fs PATH -> true when PATH is on the same filesystem as / (of NOSY_FS in tests).
+# _bkp_same_fs PATH -> 0 when PATH (symlinks followed) is on the same filesystem
+# as / (or NOSY_FS in tests), 1 when it is on another one, 2 when stat cannot tell.
 _bkp_same_fs() {
   local a b
-  a="$(stat -c %d -- "$1" 2>/dev/null)" || return 1
-  b="$(stat -c %d -- "${NOSY_FS:-}/" 2>/dev/null)" || return 1
-  [ -n "$a" ] && [ "$a" = "$b" ]
+  a="$(stat -L -c %d -- "$1" 2>/dev/null)" && [ -n "$a" ] || return 2
+  b="$(stat -L -c %d -- "${NOSY_FS:-}/" 2>/dev/null)" && [ -n "$b" ] || return 2
+  [ "$a" = "$b" ] && return 0
+  return 1
+}
+
+# _bkp_local_offset -> seconds east of UTC for the local time zone (from date +%z).
+_bkp_local_offset() {
+  local z sign hh mm
+  z="$(date +%z 2>/dev/null)"
+  [[ "$z" =~ ^([+-])([0-9]{2})([0-9]{2})$ ]] || { echo 0; return 0; }
+  sign="${BASH_REMATCH[1]}"; hh=$((10#${BASH_REMATCH[2]})); mm=$((10#${BASH_REMATCH[3]}))
+  echo "${sign}$((hh * 3600 + mm * 60))"
+}
+
+# _bkp_age_text SECONDS -> "N day(s)" or "N hour(s)" for titles.
+_bkp_age_text() {
+  if [ "$1" -lt 86400 ]; then printf '%d hour(s)' $(($1 / 3600)); else printf '%d day(s)' $(($1 / 86400)); fi
 }
 
 # Result of the scan (module globals, reset by _bkp_scan).
@@ -80,7 +96,7 @@ _bkp_scan_schedules() {
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       _BKP_SCHED+=("cron $(_bkp_show "$f")"); _BKP_FILES+=("$f")
-    done < <(awk -v re="$_BKP_RE" '!/^[[:space:]]*#/ && $0 ~ re { print FILENAME }' "${readable[@]}" 2>/dev/null | awk '!seen[$0]++')
+    done < <(awk -v re="$_BKP_RE" '{ l = $0; sub(/[[:space:]]#.*$/, "", l) } l !~ /^[[:space:]]*#/ && l ~ re { print FILENAME }' "${readable[@]}" 2>/dev/null | awk '!seen[$0]++')
   fi
 
   # enabled systemd timers (a *.wants/ link) whose name or service mentions a backup tool
@@ -141,7 +157,8 @@ _bkp_scan_ages() {
             fi ;;
           *:*) _BKP_REMOTE=1 ;;
         esac
-      done < <(grep -hoE -- '(-r|--repo)[= ]+[^ "'"'"';]+|RESTIC_REPOSITORY=["'"'"']?[^ "'"'"';]+' "${_BKP_FILES[@]}" 2>/dev/null \
+      done < <(grep -hv '^[[:space:]]*#' "${_BKP_FILES[@]}" 2>/dev/null | sed 's/[[:space:]]#.*$//' \
+        | grep -oE -- '(-r|--repo)[= ]+[^ "'"'"';]+|RESTIC_REPOSITORY=["'"'"']?[^ "'"'"';]+' \
         | sed -E 's/^(-r|--repo)[= ]+//; s/^RESTIC_REPOSITORY=["'"'"']?//' | awk '!seen[$0]++')
     fi
   fi
@@ -174,14 +191,16 @@ _bkp_scan_ages() {
 
   # timeshift: snapshot dirs are named after their time
   if _bkp_has timeshift; then
-    local best=0 n
+    local best=0 n off
+    off="$(_bkp_local_offset)"
     for d in "$R/timeshift/snapshots" "$R/timeshift-btrfs/snapshots" "$R"/run/timeshift/backup/timeshift*/snapshots "$R"/run/timeshift/*/backup/timeshift*/snapshots; do
       [ -d "$d" ] || continue
       _BKP_LOCAL+=("$d")
       for f in "$d"/*; do
         n="${f##*/}"
         [[ "$n" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})$ ]] || continue
-        e="$(ymd_epoch "${BASH_REMATCH[@]:1:6}")"
+        # the name is local time: convert it to UTC epoch seconds
+        e=$(( $(ymd_epoch "${BASH_REMATCH[@]:1:6}") - off ))
         [ "$e" -gt "$best" ] && best="$e"
       done
     done
@@ -229,13 +248,16 @@ mod_backup() {
 
   # BKP-003 age
   if [ "${#_BKP_AGE[@]}" -gt 0 ]; then
-    local best=0 label="" c e now days
+    local best=0 label="" c e now age when
     for c in "${_BKP_AGE[@]}"; do e="${c%%|*}"; [ "$e" -gt "$best" ] && { best="$e"; label="${c#*|}"; }; done
-    now="$(nosy_now)"; days=$(( (now - best) / 86400 )); [ "$days" -lt 0 ] && days=0
-    if [ "$days" -gt "$BACKUP_MAX_AGE" ]; then
-      warn BKP-003 "last backup $days day(s) ago" "newest: $label; older than $BACKUP_MAX_AGE days (--backup-max-age). the job may be failing quietly" "check the job's log (journalctl -u NAME, cron mail) and run it once by hand"
+    # compare in seconds: 7 days and 5 hours is older than a 7-day limit
+    now="$(nosy_now)"; age=$((now - best)); [ "$age" -lt 0 ] && age=0
+    when="$(_bkp_age_text "$age")"
+    if [ "$age" -gt $((BACKUP_MAX_AGE * 86400)) ]; then
+      [ $((age / 86400)) -le "$BACKUP_MAX_AGE" ] && when="over $BACKUP_MAX_AGE day(s)"
+      warn BKP-003 "last backup $when ago" "newest: $label; older than $BACKUP_MAX_AGE days (--backup-max-age). the job may be failing quietly" "check the job's log (journalctl -u NAME, cron mail) and run it once by hand"
     else
-      ok BKP-003 "last backup $days day(s) ago" "newest: $label; limit $BACKUP_MAX_AGE days. an age is not a restore test, try one now and then"
+      ok BKP-003 "last backup $when ago" "newest: $label; limit $BACKUP_MAX_AGE days. an age is not a restore test, try one now and then"
     fi
   elif [ "$IS_ROOT" -ne 1 ]; then
     skip BKP-003 "age of the last backup" "needs root to read root's backup caches and repositories"
@@ -244,26 +266,34 @@ mod_backup() {
     for t in "${found[@]}"; do
       case "$t" in
         kopia|duplicati) why+=("$t keeps it behind the repository password or in its database") ;;
-        borgmatic) ;;
+        borgmatic) case " ${found[*]} " in *" borg "*) ;; *) why+=("borgmatic: no borg security dir (~/.config/borg/security) readable") ;; esac ;;
         *) why+=("$t: no readable cache or local repository") ;;
       esac
     done
-    skip BKP-003 "age of the last backup" "cannot tell without a password: $(join '; ' "${why[@]}")"
+    [ "${#why[@]}" -gt 0 ] || why=("no readable backup metadata")
+    skip BKP-003 "age of the last backup" "cannot tell from metadata readable without a password: $(join '; ' "${why[@]}")"
   fi
 
   # BKP-004 where backups are stored
   if [ "${#_BKP_LOCAL[@]}" -gt 0 ] || [ "$_BKP_REMOTE" -eq 1 ]; then
-    local p onroot=() elsewhere=()
+    local p rc onroot=() elsewhere=() unknown=() unk_note=""
     for p in "${_BKP_LOCAL[@]}"; do
-      if _bkp_same_fs "$p"; then onroot+=("$(_bkp_show "$p")"); else elsewhere+=("$(_bkp_show "$p")"); fi
+      _bkp_same_fs "$p"; rc=$?
+      case "$rc" in
+        0) onroot+=("$(_bkp_show "$p")") ;;
+        1) elsewhere+=("$(_bkp_show "$p")") ;;
+        *) unknown+=("$(_bkp_show "$p")") ;;
+      esac
     done
-    n="${#onroot[@]}"
-    if [ "$n" -gt 0 ] && [ "${#elsewhere[@]}" -eq 0 ] && [ "$_BKP_REMOTE" -eq 0 ]; then
-      warn BKP-004 "backups stored on the root filesystem" "$(trunc_list 3 "${onroot[@]}"): lost together with the disk or the server" "send a copy off the server (restic/borg to a storage box or S3, rsync to another host)"
-    elif [ "$_BKP_REMOTE" -eq 1 ]; then
+    [ "${#unknown[@]}" -gt 0 ] && unk_note="; could not determine the filesystem of $(trunc_list 3 "${unknown[@]}")"
+    if [ "$_BKP_REMOTE" -eq 1 ]; then
       ok BKP-004 "a remote repository is in use" "copies live off this server"
+    elif [ "${#elsewhere[@]}" -gt 0 ]; then
+      ok BKP-004 "backups on a separate filesystem" "$(trunc_list 3 "${elsewhere[@]}"); a second volume survives a broken root disk, not a deleted server${onroot[0]:+; also on the root filesystem: $(trunc_list 3 "${onroot[@]}")}$unk_note"
+    elif [ "${#onroot[@]}" -gt 0 ]; then
+      warn BKP-004 "backups stored on the root filesystem" "$(trunc_list 3 "${onroot[@]}"): lost together with the disk or the server$unk_note" "send a copy off the server (restic/borg to a storage box or S3, rsync to another host)"
     else
-      ok BKP-004 "backups on a separate filesystem" "$(trunc_list 3 "${elsewhere[@]}"); a second volume survives a broken root disk, not a deleted server"
+      skip BKP-004 "backups stored off the root disk" "could not determine the filesystem of $(trunc_list 3 "${unknown[@]}") (stat failed)"
     fi
   else
     skip BKP-004 "backups stored off the root disk" "backup destination not visible (remote, or set in a config nosycat does not read)"

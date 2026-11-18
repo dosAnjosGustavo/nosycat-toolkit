@@ -64,7 +64,7 @@ You just deployed a VPS. It boots, SSH works, the app is up. Then, weeks later, 
 - **nothing leaves the server.** No network calls besides a DNS lookup of `example.com` and whatever your package manager does when queried.
 - **works without root,** with reduced visibility: checks that need root are marked `SKIP` instead of guessing.
 
-Read the code before running anything with `sudo`, this one included. It is about 2,900 lines of plain Bash. Found a security problem in nosycat itself? See [`SECURITY.md`](SECURITY.md).
+Read the code before running anything with `sudo`, this one included. It is about 3,000 lines of plain Bash. Found a security problem in nosycat itself? See [`SECURITY.md`](SECURITY.md).
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 
@@ -269,7 +269,7 @@ Every check, with its id, rationale, severity and fix, is listed in [`docs/check
 | `--format` | use |
 |---|---|
 | `text` | colored terminal output, printed as checks run, ending in a summary card: counts and a status bar, status by module, the top FAIL/WARN items to fix first and a verdict (default) |
-| `md` | Markdown report with an environment table and one table per module |
+| `md` | Markdown report with an environment table and one table per module (plain ASCII with `--ascii` or a non-UTF-8 locale) |
 | `json` | `{schema_version, tool, version, host, problems_only, environment, summary, checks[]}`, one object per check with `id`, `module`, `status`, `title`, `detail`, `fix` (plus `original_status`, `ignore_reason` and `ignore_until` when ignored, `ignore_expired` when an ignore ran out). Fields and the stability policy: [`docs/json.md`](docs/json.md) |
 
 **`-q` / `--problems-only`** works with every format: `text` prints only WARN/FAIL checks (with why and fix), a one-line banner and the summary; `md` keeps only the WARN/FAIL rows; `json` keeps only WARN/FAIL in `checks[]` and sets `"problems_only": true`. The summary counts and the exit code always cover every check.
@@ -295,11 +295,14 @@ NET-001: grafana on 3000 is behind the provider firewall
 SEC-005: installer needs exec until 2027-01-31
 BKP-001: provider snapshots, daily until 2027-06-30
 SNP-* until 2026-12-31
+SSH-008: ex-contractor account, see ticket #4512 until 2027-03-01
 ```
 
 One check id per line, optionally `: reason`; globs like `SNP-*` work. Matching WARN/FAIL results are shown as `IGNORED` with your reason, kept in the JSON with their original status, and left out of the exit code. A web server on 80/443 and `/dev/shm` without `noexec` (the Debian default) no longer warn, so most servers need few entries.
 
-An accepted risk should come back for review, so an entry can end in **`until YYYY-MM-DD`** (with or without a reason). It applies through that day; from the next day the check shows its real status again with `ignore expired DATE (reason)` in its detail, counts for the exit code, and the summary lists it. Entries without a date stay permanent, and the summary gently suggests adding one. An invalid date (`2027-02-30`) prints a warning and skips that entry, so the finding shows.
+An accepted risk should come back for review, so an entry can end in **`until YYYY-MM-DD`** (with or without a reason). It applies through that day; from the next day the check shows its real status again with `ignore expired DATE (reason)` in its detail, counts for the exit code, and the summary lists it. Entries without a date stay permanent, and the summary gently suggests adding one. An invalid date (`2027-02-30`) or an `until` without a date prints a warning and skips that entry, so the finding shows. `until` is matched in any case.
+
+`#` starts a comment only at the start of a line or right after the id (`SEC-00*   # globs work`); inside a reason it is kept as text, so `see ticket #4512 until 2027-03-01` keeps both the ticket number and the date.
 
 <p align="center">.·:*¨¨* ❀ *¨¨*:·.</p>
 

@@ -40,7 +40,7 @@
 | `checks[]` | array | one object per check, in run order |
 | `checks[].status` | string | `OK`, `WARN`, `FAIL`, `SKIP`, `INFO` or `IGNORED` |
 | `checks[].original_status`, `ignore_reason`, `ignore_until` | string, string, string or null | only on `IGNORED`: what it would have been, your reason, and the last day the ignore applies (`null` = permanent) |
-| `checks[].ignore_expired`, `ignore_reason` | string | only on a check whose ignore has expired: the date it expired and the reason it had |
+| `checks[].ignore_expired`, `ignore_reason` | string | only on a check whose ignore has expired: the entry's `until` date (the last day it still applied; it stopped applying the day after) and the reason it had |
 
 Check ids are stable: an id keeps its meaning, and a removed check's id is never reused. All ids are listed in [`checks.md`](checks.md).
 

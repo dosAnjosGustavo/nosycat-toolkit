@@ -77,8 +77,8 @@ usage: sudo ./nosycat.sh [options]
                       STATE_DIR/.nosycat.ignore is always read if present.
                       lines: ID, ID: reason, optional "until YYYY-MM-DD"
   --backup-max-age N  warn when the last backup is older than N days (default 7)
-  --timeout SECS      per-command timeout (default: $NOSY_TIMEOUT)
-  --list              list modules and exit
+  --timeout SECS      per-command timeout, 1 or more (default: $NOSY_TIMEOUT)
+  --list              list the modules --only/--skip accept and exit
   -h, --help          show this help
   -V, --version       show version
 
@@ -97,32 +97,39 @@ set_backup_max_age() {
   BACKUP_MAX_AGE="$((10#$1))"
 }
 
+# set_timeout SECS -> validates and sets NOSY_TIMEOUT (1 or more; timeout 0 would mean no limit).
+set_timeout() {
+  if ! [[ "$1" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$1))" -lt 1 ]; then die_usage "--timeout needs a number of seconds (1 or more)"; fi
+  NOSY_TIMEOUT="$((10#$1))"
+}
+
 ONLY="" SKIP_LIST="" OUTDIR="" MODE="check" STATE_DIR="" IGNORE_FILES=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --only) [ -n "${2:-}" ] || die_usage "--only needs a value"; ONLY="$2"; shift 2 ;;
-    --only=*) ONLY="${1#*=}"; shift ;;
+    --only=*) ONLY="${1#*=}"; [ -n "$ONLY" ] || die_usage "--only needs a value"; shift ;;
     --skip) [ -n "${2:-}" ] || die_usage "--skip needs a value"; SKIP_LIST="$2"; shift 2 ;;
-    --skip=*) SKIP_LIST="${1#*=}"; shift ;;
+    --skip=*) SKIP_LIST="${1#*=}"; [ -n "$SKIP_LIST" ] || die_usage "--skip needs a value"; shift ;;
     --format) [ -n "${2:-}" ] || die_usage "--format needs a value"; FORMAT="$2"; shift 2 ;;
-    --format=*) FORMAT="${1#*=}"; shift ;;
+    --format=*) FORMAT="${1#*=}"; [ -n "$FORMAT" ] || die_usage "--format needs a value"; shift ;;
     --output) [ -n "${2:-}" ] || die_usage "--output needs a directory"; OUTDIR="$2"; shift 2 ;;
-    --output=*) OUTDIR="${1#*=}"; shift ;;
+    --output=*) OUTDIR="${1#*=}"; [ -n "$OUTDIR" ] || die_usage "--output needs a directory"; shift ;;
     --state-dir) [ -n "${2:-}" ] || die_usage "--state-dir needs a directory"; STATE_DIR="$2"; shift 2 ;;
-    --state-dir=*) STATE_DIR="${1#*=}"; shift ;;
+    --state-dir=*) STATE_DIR="${1#*=}"; [ -n "$STATE_DIR" ] || die_usage "--state-dir needs a directory"; shift ;;
     --ignore) [ -n "${2:-}" ] || die_usage "--ignore needs a file"; IGNORE_FILES+=("$2"); shift 2 ;;
-    --ignore=*) IGNORE_FILES+=("${1#*=}"); shift ;;
+    --ignore=*) [ -n "${1#*=}" ] || die_usage "--ignore needs a file"; IGNORE_FILES+=("${1#*=}"); shift ;;
     -q|--problems-only) PROBLEMS_ONLY=1; shift ;;
     --backup-max-age) set_backup_max_age "${2:-}"; shift 2 ;;
     --backup-max-age=*) set_backup_max_age "${1#*=}"; shift ;;
-    --timeout) [[ "${2:-}" =~ ^[0-9]+$ ]] || die_usage "--timeout needs seconds"; NOSY_TIMEOUT="$2"; shift 2 ;;
+    --timeout) set_timeout "${2:-}"; shift 2 ;;
+    --timeout=*) set_timeout "${1#*=}"; shift ;;
     --color) case "${2:-}" in auto|always|never) COLOR_MODE="$2" ;; *) die_usage "--color needs auto|always|never" ;; esac; shift 2 ;;
     --color=*) COLOR_MODE="${1#*=}"; case "$COLOR_MODE" in auto|always|never) ;; *) die_usage "--color needs auto|always|never" ;; esac; shift ;;
     --no-color) COLOR_MODE=never; shift ;;
     --ascii) ASCII_MODE=on; shift ;;
     --snapshot) [ "$MODE" = "diff" ] && die_usage "--snapshot and --diff are exclusive"; MODE="snapshot"; shift ;;
     --diff) [ "$MODE" = "snapshot" ] && die_usage "--snapshot and --diff are exclusive"; MODE="diff"; shift ;;
-    --list) printf '%s\n' "${ALL_MODULES[@]}" snapshot; exit 0 ;;
+    --list) printf '%s\n' "${ALL_MODULES[@]}"; exit 0 ;;
     -h|--help) usage; exit 0 ;;
     -V|--version) echo "$NOSY_NAME $NOSY_VERSION"; exit 0 ;;
     *) die_usage "unknown option: $1" ;;

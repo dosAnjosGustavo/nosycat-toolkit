@@ -23,14 +23,65 @@ _ign_summary() {
   return 0
 }
 
+# _utf8_clean TEXT -> TEXT with every byte that is not part of a valid UTF-8
+# sequence replaced by "?" (file names and process names are raw bytes; JSON
+# must be UTF-8). Pure Bash so the result is the same with or without iconv.
+_utf8_clean() {
+  local LC_ALL=C s="$1" out="" i=0 len c c1 need lo hi k ok
+  case "$s" in *[$'\x80'-$'\xff']*) ;; *) printf '%s' "$s"; return 0 ;; esac
+  len=${#s}
+  while [ "$i" -lt "$len" ]; do
+    c="${s:i:1}"
+    if [[ "$c" < $'\x80' ]]; then out+="$c"; i=$((i + 1)); continue; fi
+    need=0 lo=$'\x80' hi=$'\xbf'
+    if [[ "$c" > $'\xc1' && "$c" < $'\xe0' ]]; then need=1
+    elif [[ "$c" > $'\xdf' && "$c" < $'\xf0' ]]; then need=2
+      [ "$c" = $'\xe0' ] && lo=$'\xa0'; [ "$c" = $'\xed' ] && hi=$'\x9f'
+    elif [[ "$c" > $'\xef' && "$c" < $'\xf5' ]]; then need=3
+      [ "$c" = $'\xf0' ] && lo=$'\x90'; [ "$c" = $'\xf4' ] && hi=$'\x8f'
+    fi
+    ok=0
+    if [ "$need" -gt 0 ] && [ $((i + need)) -lt $((len + 1)) ]; then
+      ok=1
+      for ((k = 1; k <= need; k++)); do
+        c1="${s:i+k:1}"
+        if [ "$k" -eq 1 ]; then
+          { [[ "$c1" < "$lo" ]] || [[ "$c1" > "$hi" ]]; } && { ok=0; break; }
+        else
+          { [[ "$c1" < $'\x80' ]] || [[ "$c1" > $'\xbf' ]]; } && { ok=0; break; }
+        fi
+      done
+    fi
+    if [ "$ok" -eq 1 ]; then out+="${s:i:need+1}"; i=$((i + need + 1)); else out+="?"; i=$((i + 1)); fi
+  done
+  printf '%s' "$out"
+}
+
 json_esc() {
-  local s="$1"
+  local s
+  s="$(_utf8_clean "$1")"
   s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"; s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
   printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037'
 }
 
-md_esc() { local s="${1//|/\\|}"; printf '%s' "${s//$'\n'/ }"; }
+# md_esc TEXT -> TEXT safe in a Markdown table cell: backslash, emphasis, code,
+# link and HTML characters are escaped, newlines become spaces.
+md_esc() {
+  local s="$1" c
+  s="${s//\\/\\\\}"
+  for c in '`' '*' '_' '[' ']' '<' '>' '|'; do s="${s//"$c"/\\$c}"; done
+  printf '%s' "${s//$'\n'/ }"
+}
+
+# md_code TEXT -> TEXT as an inline code span in a table cell (only | needs an
+# escape there; a fence longer than any backtick run inside keeps it intact).
+md_code() {
+  local s="${1//|/\\|}" f='`'
+  s="${s//$'\n'/ }"
+  while [[ "$s" == *"$f"* ]]; do f+='`'; done
+  if [ "$f" = '`' ]; then printf '%s%s%s' "$f" "$s" "$f"; else printf '%s %s %s' "$f" "$s" "$f"; fi
+}
 
 print_banner() {
   local art
@@ -333,7 +384,12 @@ render_text_full() {
   print_summary
 }
 
+# render_md -> Markdown report; plain ASCII under --ascii or a non-UTF-8 locale.
 render_md() {
+  if use_utf8; then _render_md_body; else printf '%s\n' "$(_asciify "$(_render_md_body)")"; fi
+}
+
+_render_md_body() {
   local i last=""
   printf '# %s report: %s\n\n' "$NOSY_NAME" "$(md_esc "$HOST_NAME")"
   printf '_generated %s by %s %s (read-only)_\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NOSY_NAME" "$NOSY_VERSION"
@@ -351,7 +407,7 @@ render_md() {
       last="${R_MOD[$i]}"
     fi
     local fx="${R_FIX[$i]}"; { [ "${R_STATUS[$i]}" = "OK" ] || [ "${R_STATUS[$i]}" = "IGNORED" ] || [ "${R_STATUS[$i]}" = "INFO" ]; } && fx=""
-    printf '| %s | %s | %s | %s | %s |\n' "${R_STATUS[$i]}" "${R_ID[$i]}" "$(md_esc "${R_TITLE[$i]}")" "$(md_esc "${R_DETAIL[$i]}")" "${fx:+\`$(md_esc "$fx")\`}"
+    printf '| %s | %s | %s | %s | %s |\n' "${R_STATUS[$i]}" "${R_ID[$i]}" "$(md_esc "${R_TITLE[$i]}")" "$(md_esc "${R_DETAIL[$i]}")" "${fx:+$(md_code "$fx")}"
   done
 }
 

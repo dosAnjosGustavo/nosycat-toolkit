@@ -110,6 +110,18 @@ _perm_bad() {
   return 1
 }
 
+# _group_members NAME -> space-separated members of group NAME ($ETC/group in tests, else getent).
+_group_members() {
+  local line
+  if [ "$ETC" != "/etc" ] && [ -r "$ETC/group" ]; then
+    line="$(awk -F: -v g="$1" '$1 == g {print; exit}' "$ETC/group")"
+  else
+    line="$(getent group "$1" 2>/dev/null)"
+  fi
+  line="${line##*:}"
+  printf '%s' "${line//,/ }"
+}
+
 mod_access() {
   if [ ! -e "$ETC/ssh/sshd_config" ] && ! fx_set SSHD_T && ! have sshd && [ ! -x /usr/sbin/sshd ]; then
     skip SSH-001 "ssh daemon" "OpenSSH server not installed"
@@ -152,22 +164,35 @@ mod_access() {
   fi
 
   # SSH-006 a non-root sudo/wheel user exists
-  local g members admins=()
+  local g u members admins=() sudoers_read=0 sf
+  local -a sfiles=()
   for g in sudo wheel admin; do
-    members="$(getent group "$g" 2>/dev/null | cut -d: -f4)"
-    [ -n "$members" ] && admins+=("${members//,/ }")
-  done
-  if [ "$IS_ROOT" -eq 1 ] && [ -d /etc/sudoers.d ]; then
-    members="$(grep -hE '^[a-z_][a-z0-9_-]*[[:space:]]+ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | awk '$1!="root"{print $1}' | sort -u | tr '\n' ' ')"
+    members="$(_group_members "$g")"
     [ -n "$members" ] && admins+=("$members")
+  done
+  if [ -r "$ETC/sudoers" ]; then
+    sudoers_read=1; sfiles+=("$ETC/sudoers")
+    for sf in "$ETC"/sudoers.d/*; do [ -f "$sf" ] && [ -r "$sf" ] && sfiles+=("$sf"); done
+    # full grants only ("WHO HOSTS=(...) ALL"); "%group" lines count their members
+    while IFS= read -r u; do
+      case "$u" in
+        %*) members="$(_group_members "${u#%}")"; [ -n "$members" ] && admins+=("$members") ;;
+        *) admins+=("$u") ;;
+      esac
+    done < <(awk '/^[[:space:]]*#/ {next}
+      $1 ~ /^(Defaults|Cmnd_Alias|Host_Alias|User_Alias|Runas_Alias)/ {next}
+      $1 ~ /^[A-Z][A-Z0-9_]*$/ {next}
+      $1 ~ /^%?[A-Za-z_][A-Za-z0-9_.-]*$/ && $0 ~ /=/ && $0 ~ /[[:space:]:=)]ALL[[:space:]]*$/ {print $1}' "${sfiles[@]}" 2>/dev/null | sort -u)
   fi
   # shellcheck disable=SC2206
-  local list=(${admins[*]})
-  if [ "${#list[@]}" -gt 0 ]; then
-    ok SSH-006 "non-root admin user(s): $(printf '%s\n' "${list[@]}" | sort -u | paste -sd' ')" ""
+  local list=(${admins[*]}) nonroot=()
+  for u in "${list[@]}"; do [ "$u" != "root" ] && nonroot+=("$u"); done
+  if [ "${#nonroot[@]}" -gt 0 ]; then
+    ok SSH-006 "non-root admin user(s): $(printf '%s\n' "${nonroot[@]}" | sort -u | paste -sd' ')" ""
+  elif [ "$sudoers_read" -eq 0 ] && { [ -e "$ETC/sudoers" ] || [ -d "$ETC/sudoers.d" ]; }; then
+    skip SSH-006 "non-root sudo/wheel user" "no member of sudo/wheel/admin; needs root to read the sudoers files"
   else
-    local nr=""; [ "$IS_ROOT" -eq 1 ] || nr=" (sudoers files not readable without root, so this may be incomplete)"
-    warn SSH-006 "no non-root sudo/wheel user" "working as root means no audit trail and no safety net; you also cannot disable root login$nr" "sudo adduser deploy && sudo usermod -aG sudo deploy   # wheel on RHEL/Arch/Alpine"
+    warn SSH-006 "no non-root sudo/wheel user" "working as root means no audit trail and no safety net; you also cannot disable root login" "sudo adduser deploy && sudo usermod -aG sudo deploy   # wheel on RHEL/Arch/Alpine"
   fi
 
   # SSH-007 authorized_keys permissions (StrictModes silently rejects keys)
