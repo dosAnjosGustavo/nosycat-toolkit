@@ -5,7 +5,7 @@
 # shellcheck disable=SC2034  # globals are consumed by other sourced files
 
 NOSY_NAME="nosycat-toolkit"
-NOSY_VERSION="0.2.0"
+NOSY_VERSION="0.2.1"
 # JSON report format version (docs/json.md). Bumped only on breaking changes.
 NOSY_SCHEMA_VERSION="1"
 
@@ -206,8 +206,11 @@ nosy_mktemp_dir() {
 # Format, one per line:
 #   ID  |  ID: reason  |  NET-*  (globs)  |  # comment
 #   ... until YYYY-MM-DD   (optional, last day the entry applies; then it expires)
-# "until" counts as an expiry only when the word after it starts with a digit, so
-# a reason like "open until we move to the vpn" stays a reason.
+# "#" starts a comment only at the start of a line or right after the id, so a
+# reason like "see ticket #123 until 2027-01-31" keeps its text and its date.
+# "until" (any case) counts as an expiry only when the word after it is the last
+# word and starts with a digit, so "open until we move to the vpn" stays a reason;
+# a trailing "until" with no date is reported like an invalid date.
 # Returns 1 when FILE cannot be read; malformed lines and invalid dates are
 # reported on stderr and skipped (the finding then shows normally).
 load_ignore_file() {
@@ -215,19 +218,23 @@ load_ignore_file() {
   [ -r "$file" ] && { [ -f "$file" ] || [ -p "$file" ]; } || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
-    line="${line%%[[:space:]]#*}"
-    case "$line" in \#*) continue ;; esac
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
     pat="${line%%[:[:space:]]*}"
     why="${line:${#pat}}"; why="${why#"${why%%[![:space:]]*}"}"; why="${why#:}"; why="${why#"${why%%[![:space:]]*}"}"
+    case "$why" in \#*) why="" ;; esac   # "SEC-00*   # note": a comment after the id
     pat="$(printf '%s' "$pat" | tr '[:lower:]' '[:upper:]')"
     if ! [[ "$pat" =~ ^[A-Z]{2,4}-[0-9*?]{1,3}$ ]]; then
       echo "nosycat: $file line $n: '$line' is not a check id (e.g. NET-001 or NET-*), skipped" >&2
       continue
     fi
     until=""
-    if [[ " $why" =~ ^(.*)[[:space:]]until[[:space:]]+([0-9][^[:space:]]*)$ ]]; then
+    if [[ " $why" =~ ^(.*)[[:space:]][Uu][Nn][Tt][Ii][Ll]$ ]]; then
+      echo "nosycat: $file line $n: 'until' needs a date (until YYYY-MM-DD), entry skipped" >&2
+      continue
+    fi
+    if [[ " $why" =~ ^(.*)[[:space:]][Uu][Nn][Tt][Ii][Ll][[:space:]]+([0-9][^[:space:]]*)$ ]]; then
       until="${BASH_REMATCH[2]}"; why="${BASH_REMATCH[1]}"
       why="${why#"${why%%[![:space:]]*}"}"; why="${why%"${why##*[![:space:]]}"}"
       if ! valid_ymd "$until"; then

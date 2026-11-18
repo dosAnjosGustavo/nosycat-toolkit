@@ -49,7 +49,7 @@ Every check `nosycat.sh` runs. **Severity** is the worst status a check can retu
 | SSH-003 | `PermitRootLogin` | `yes` = root by password; `prohibit-password` = root by key | FAIL | `PermitRootLogin no` after creating a sudo user |
 | SSH-004 | `PermitEmptyPasswords no` | accounts without password could log in | FAIL | `PermitEmptyPasswords no` |
 | SSH-005 | SSH port(s): every `Port` and `ListenAddress host:port` | informational; port 22 is fine with key-only auth | info | none |
-| SSH-006 | a non-root member of sudo/wheel/admin or sudoers exists | no audit trail; root login cannot be disabled | WARN | `adduser deploy && usermod -aG sudo deploy` |
+| SSH-006 | a non-root member of sudo/wheel/admin, or a full sudoers grant (`user ALL=... ALL` or `%group ALL=... ALL`, in `/etc/sudoers` and `/etc/sudoers.d`) exists. Without root the sudoers files are unreadable, so no admin-group member is a SKIP, not a WARN | no audit trail; root login cannot be disabled | WARN | `adduser deploy && usermod -aG sudo deploy` |
 | SSH-007 | home, `~/.ssh`, `authorized_keys` not group/world-writable, correct owner | StrictModes silently ignores keys → lockout | FAIL | `chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys` |
 | SSH-008 | login accounts that never logged in (`lastlog`/`lastlog2`) | forgotten accounts are attack surface | WARN | lock or remove the account |
 | SSH-009 | accounts with an empty password in `/etc/shadow` | console/su login without password | FAIL | `passwd -l USER` |
@@ -133,9 +133,9 @@ Read-only and secret-free: nosycat never runs a backup tool, and never asks for 
 | id | what | why it matters | severity | fix |
 |---|---|---|---|---|
 | BKP-001 | a backup tool is installed: restic, borg/borgmatic, rsnapshot, timeshift, duplicity, duplicati, kopia | no backup is the problem you only find out about during the outage | WARN | install restic or borg with a repository off the server |
-| BKP-002 | the backup runs by itself: `/etc/crontab`, `/etc/cron.d`, `/etc/cron.{hourly,daily,weekly,monthly}`, the cron spool, enabled systemd timers (a `*.wants/` link) whose name or service mentions a backup tool, timeshift's own schedule, duplicati/kopia server units. Commented-out lines do not count. As non-root, an empty result is a SKIP (root's crontab is not readable) | a backup that runs by hand stops running | WARN | a systemd service + timer, or a `/etc/cron.d` entry |
-| BKP-003 | age of the newest backup, from metadata readable without a password: restic cache (`~/.cache/restic/*/snapshots`) or a local repo's `snapshots/`, borg `~/.config/borg/security/*/manifest-timestamp`, rsnapshot `<snapshot_root>/<interval>.0`, timeshift snapshot names, duplicity cache. kopia and duplicati keep this behind the password or in their database, so it is a SKIP with the reason | a job that fails quietly looks exactly like one that works | WARN (older than `--backup-max-age`, default 7 days) | read the job's log, run it once by hand, test a restore |
-| BKP-004 | where local backups live: rsnapshot root, local restic/borg repo, timeshift snapshots on the same filesystem as `/`. OK when a remote repository is in use or the target is a separate filesystem; SKIP when the destination is not visible | a copy on the same disk dies with the disk, and with the server | WARN | send a copy off the server (storage box, S3, another host) |
+| BKP-002 | the backup runs by itself: `/etc/crontab`, `/etc/cron.d`, `/etc/cron.{hourly,daily,weekly,monthly}`, the cron spool, enabled systemd timers (a `*.wants/` link) whose name or service mentions a backup tool, timeshift's own schedule, duplicati/kopia server units. Commented-out lines and trailing ` # comments` do not count. As non-root, an empty result is a SKIP (root's crontab is not readable) | a backup that runs by hand stops running | WARN | a systemd service + timer, or a `/etc/cron.d` entry |
+| BKP-003 | age of the newest backup, from metadata readable without a password: restic cache (`~/.cache/restic/*/snapshots`) or a local repo's `snapshots/`, borg `~/.config/borg/security/*/manifest-timestamp`, rsnapshot `<snapshot_root>/<interval>.0`, timeshift snapshot names, duplicity cache. kopia and duplicati keep this behind the password or in their database, so it is a SKIP with the reason. The age is compared in seconds (7 days and 5 hours is over a 7-day limit); timeshift names are read as local time. Caveat: the restic cache and borg's `manifest-timestamp` are also refreshed by read-only commands (`restic snapshots`, `restic check`, `borg list`), so a monitoring job that only lists snapshots can make a failing backup look fresh; check the job's own log too | a job that fails quietly looks exactly like one that works | WARN (older than `--backup-max-age`, default 7 days) | read the job's log, run it once by hand, test a restore |
+| BKP-004 | where local backups live: rsnapshot root, local restic/borg repo, timeshift snapshots on the same filesystem as `/`. OK when a remote repository is in use or the target is a separate filesystem; symlinks are followed (`stat -L`); SKIP when the destination is not visible or its filesystem cannot be determined (never counted as separate) | a copy on the same disk dies with the disk, and with the server | WARN | send a copy off the server (storage box, S3, another host) |
 
 #### ignoring accepted findings
 
@@ -143,11 +143,15 @@ Put check ids in `.nosycat.ignore` inside the state dir (`/var/lib/nosycat/.nosy
 
 ```
 # one per line: ID, ID: reason, or a glob; optionally "until YYYY-MM-DD"
+# "#" starts a comment only at the start of a line or right after the id
 NET-001: grafana on 3000 is behind the provider firewall
 SEC-005: installer needs exec until 2027-01-31
 BKP-001: provider snapshots, daily until 2027-06-30
 SNP-* until 2026-12-31
+SSH-008: ex-contractor account, see ticket #4512 until 2027-03-01
 ```
+
+A `#` inside a reason is part of the reason (`ticket #4512` above). `until` is matched in any case and must be followed by a valid `YYYY-MM-DD`; `until` with no date, or an invalid date, prints a warning on stderr and the entry is skipped, so the finding shows.
 
 - **expiry:** `until YYYY-MM-DD` is the last day the entry applies. From the next day the check shows its real status again, its detail starts with `ignore expired DATE (reason)`, it counts for the exit code, JSON adds `ignore_expired` (and `summary.ignore_expired`), and the summary lists the expired ids. The date is the server's local date.
 - **no expiry:** the entry is permanent, and the text summary adds a gentle tip to set one, so accepted risks come back for review instead of being swept under the rug.

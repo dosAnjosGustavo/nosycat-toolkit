@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# JSON schema_version, version 0.2.0, and the collaboration files.
+# JSON schema_version, version 0.2.1, and the collaboration files.
 
 load helpers
 
@@ -18,10 +18,10 @@ setup() { load_nosycat; }
   printf '%s' "$output" | jq -e '.schema_version == "1" and .tool == "nosycat-toolkit"'
 }
 
-@test "version is 0.2.0 and the CHANGELOG has its section" {
+@test "version is 0.2.1 and the CHANGELOG has its section" {
   run bash "$NOSY_SRC/nosycat.sh" --version
-  [ "$output" = "nosycat-toolkit 0.2.0" ]
-  grep -q '^## \[0.2.0\]' "$NOSY_SRC/CHANGELOG.md"
+  [ "$output" = "nosycat-toolkit 0.2.1" ]
+  grep -q '^## \[0.2.1\]' "$NOSY_SRC/CHANGELOG.md"
 }
 
 @test "docs describe schema_version and its stability policy" {
