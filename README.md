@@ -73,7 +73,7 @@ Read the code before running anything with `sudo`, this one included. It is abou
 Run a tagged release, not `main`: a release is a fixed, reviewed snapshot with a published checksum, while `main` can change under you between reading the code and running it with `sudo`.
 
 ```bash
-VER=0.2.0
+VER=0.2.1
 BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
 curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz"
 curl -fsSLO "$BASE/nosycat-toolkit-$VER.tar.gz.sha256"
@@ -86,7 +86,7 @@ Prefer a single file you can `scp` to the server? Each release also ships `nosyc
 
 ```bash
 # on your machine
-VER=0.2.0
+VER=0.2.1
 BASE=https://github.com/trizdev/nosycat-toolkit/releases/download/v$VER
 curl -fsSLO "$BASE/nosycat.sh" && curl -fsSLO "$BASE/nosycat.sh.sha256"
 sha256sum -c nosycat.sh.sha256                        # must print: nosycat.sh: OK
