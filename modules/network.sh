@@ -74,8 +74,8 @@ mod_network() {
   esac
 
   # NET-003 IPv6 reachable without IPv6 rules
-  local v6=0
-  if [ -r /proc/net/if_inet6 ] && awk '$4=="00" && $6!="lo"' /proc/net/if_inet6 | grep -q .; then v6=1; fi
+  local v6=0 if_inet6="${NOSY_PROC_IF_INET6:-/proc/net/if_inet6}"
+  if [ -r "$if_inet6" ] && awk '$4=="00" && $6!="lo"' "$if_inet6" | grep -q .; then v6=1; fi
   if [ "$v6" -eq 0 ]; then
     ok NET-003 "no global IPv6 address" ""
   elif [ "$IS_ROOT" -ne 1 ]; then
