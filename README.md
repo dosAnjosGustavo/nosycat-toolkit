@@ -357,11 +357,9 @@ The parsers and checks are tested with [bats](https://github.com/bats-core/bats-
 bats tests/
 ```
 
-CI runs lint, a non-root runner bats suite, and an Ubuntu, Debian, Rocky Linux and Alpine matrix independently. Each container is prepared once; CLI smoke tests still run after a bats failure, and JSON validation runs if smoke succeeds. Every failure still fails CI.
+CI runs lint, a non-root runner bats suite, and an Ubuntu, Debian, Rocky Linux and Alpine matrix independently. Each container is prepared once; CLI smoke tests run after a bats failure when container preparation succeeds and the run is not cancelled, and JSON validation runs if smoke succeeds. Every failure still fails CI.
 
-For a regression comparison, manually dispatch `ci.yml` twice with `target_sha`: the full 40-character lowercase SHA of the tests-first commit, then its fixed child. Select the same workflow branch/tag for both runs and verify that both summaries record the **same workflow SHA**, the intended source SHAs and all step outcomes. The workflow revision and the source commit being tested are separate; keep the workflow ref unchanged between runs. The dispatch-enabled workflow must be available on the [default branch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow). Push and pull request runs keep their normal checkout semantics, including the PR merge ref.
-
-The first run should fail on the known regression assertions while smoke and JSON pass; the fixed child should pass every check. Checkout, dependency, timeout or cancellation failures are incomplete evidence, not an expected failing test. Inspect the test logs as well as summaries. Fork CI does not replace upstream CI approved by the maintainer.
+For optional checks of a specific revision, manually dispatch `ci.yml` with `target_sha` set to the source commit's full 40-character lowercase hexadecimal SHA available to checkout in that repository. The dispatch-enabled workflow must be on the [default branch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow). The selected workflow branch/tag supplies the workflow; `target_sha` selects the source checkout, while push and pull request runs keep their normal checkout behavior. To compare source revisions, keep the selected workflow ref at the same commit between runs and check the job summaries for the same workflow SHA, the intended source SHAs and recorded step outcomes.
 
 A check got it wrong on your server? Open a [false positive issue](https://github.com/trizdev/nosycat-toolkit/issues/new?template=false_positive.yml): it asks for the check id, the distro and the `--format json --only <module>` output (redacted).
 
