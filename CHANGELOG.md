@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 - **SEC-006:** fstab warnings list only the missing options. A network mount with `nofail` but no `_netdev` no longer starts with an empty `data mounts without nofail: ;` before the network warning.
 - **UPD-001:** failed or timed-out pending update queries are a SKIP instead of "no pending updates" or a count from failed output. checkupdates exit 2 and an empty `pacman -Qu` exit 1 still mean no updates; dnf/yum already handled query errors. Zypper exit 106 with listed updates keeps the count, marked partial.
+- **SYS-007/008/010:** disk and inode checks return SKIP when `df` yields no numeric usage readings, instead of OK with `max 0%`. The OOM check probes kernel-log access before counting the last 7 days: an unreadable log or a failed read without OOM events is SKIP; a readable journal with no recent entries is OK. OOM events in partial reads still WARN (the count is a lower bound). Valid 0% readings and the usage thresholds are kept.
 
 ## [0.2.1] - 2026-11-18
 
